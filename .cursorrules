@@ -29,4 +29,6 @@
   Unsloth / TRL; every flag gets a {"flag", "why"} explanation.
 - No TODOs, mocks or placeholder functions in src/. Tests use real code paths (a local HTTP Range server for the Hub).
 - Run `pytest -q` and `python -m pyflakes src tests` before committing.
-- After changing docs or CLI flags, run `python scripts/build_llms_full.py` to refresh llms-full.txt.
+- After changing docs, CLI flags or estimator math, run (with Python 3.13) `python scripts/render_readme_assets.py`
+  and `python scripts/build_llms_full.py`; CI fails if README visuals, the cheat sheet or llms-full.txt are stale.
+- README visuals in assets/*.svg are generated: never hand-edit them; they must stay valid strict XML (GitHub <img>).

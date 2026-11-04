@@ -3,7 +3,7 @@
 Sources: README.md, AGENT_GUIDE.md, the live argparse help of every sub-command, the quantization
 registry, the GPU preset database, the offline catalog, the server protocol docstring and schema.json.
 
-    python scripts/build_llms_full.py
+    python scripts/build_llms_full.py      # run with Python 3.13: argparse --help layout differs between versions
 """
 
 from __future__ import annotations
