@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>vram-fit — exact VRAM calculator for local LLMs, KV cache and LoRA/QLoRA fine-tuning</title>
 <meta name="description" content="vram-fit computes exact GPU memory (weights, KV cache, activations, CUDA overhead, LoRA/QLoRA optimizer states) and tokens/s for any Hugging Face or GGUF model on your GPU — without downloading weights — and prints a llama.cpp, Ollama, vLLM, ExLlamaV2 or Unsloth command that avoids CUDA out of memory.">
+<meta name="author" content="Azimxon Vaxobov (Ginckl)">
 <meta name="keywords" content="VRAM calculator, GPU memory calculator, LLM VRAM, KV cache size, CUDA out of memory, llama.cpp, Ollama, vLLM, GGUF, Q4_K_M, LoRA, QLoRA, Unsloth, context length, tokens per second">
 <link rel="canonical" href="https://ginckl.github.io/vram-fit/">
 <meta property="og:title" content="vram-fit — exact VRAM for local LLMs before you download them">
@@ -28,7 +29,8 @@
       "dateCreated": "2026-11-04",
       "keywords": "VRAM calculator, GPU memory, KV cache, context length, CUDA out of memory, llama.cpp, Ollama, vLLM, ExLlamaV2, Unsloth, GGUF, Q4_K_M, AWQ, GPTQ, FP8, NF4, LoRA, QLoRA, fine-tuning, tokens per second, Apple Silicon, ROCm",
       "targetProduct": {"@id": "https://github.com/GinckL/vram-fit#app"},
-      "author": {"@type": "Person", "alternateName": "GinckL", "url": "https://github.com/GinckL"}
+      "author": {"@type": "Person", "name": "Azimxon Vaxobov", "alternateName": "Ginckl", "url": "https://azimxonvaxobov.netlify.app", "sameAs": ["https://www.linkedin.com/in/azimxon-vaxobov/", "https://t.me/A_Vakhobov", "https://github.com/GinckL"]},
+      "maintainer": {"@type": "Person", "name": "Azimxon Vaxobov", "alternateName": "Ginckl", "url": "https://azimxonvaxobov.netlify.app", "sameAs": ["https://www.linkedin.com/in/azimxon-vaxobov/", "https://t.me/A_Vakhobov", "https://github.com/GinckL"]}
     },
     {
       "@type": "SoftwareApplication",
@@ -54,6 +56,7 @@
         "Tokens-per-second prediction from memory bandwidth, PCIe and TFLOPS",
         "--json output on every command with a published JSON Schema"
       ],
+      "author": {"@type": "Person", "name": "Azimxon Vaxobov", "alternateName": "Ginckl", "url": "https://azimxonvaxobov.netlify.app", "sameAs": ["https://www.linkedin.com/in/azimxon-vaxobov/", "https://t.me/A_Vakhobov", "https://github.com/GinckL"]},
       "offers": {"@type": "Offer", "price": "0", "priceCurrency": "USD"},
       "isAccessibleForFree": true
     },
@@ -200,10 +203,10 @@ Launch (llama.cpp):
 
   <section>
     <h2>Docs</h2>
-    <p><a href="https://github.com/GinckL/vram-fit#readme">README</a> · <a href="https://github.com/GinckL/vram-fit/blob/main/AGENT_GUIDE.md">Agent guide (--json)</a> · <a href="https://github.com/GinckL/vram-fit/blob/main/schema.json">JSON schema</a> · <a href="https://raw.githubusercontent.com/GinckL/vram-fit/main/llms.txt">llms.txt</a> · <a href="https://raw.githubusercontent.com/GinckL/vram-fit/main/llms-full.txt">llms-full.txt</a> · <a href="https://github.com/GinckL/vram-fit/blob/main/CITATION.cff">Cite</a></p>
+    <p><a href="https://github.com/GinckL/vram-fit#readme">README</a> · <a href="https://github.com/GinckL/vram-fit/blob/HEAD/AGENT_GUIDE.md">Agent guide (--json)</a> · <a href="https://github.com/GinckL/vram-fit/blob/HEAD/schema.json">JSON schema</a> · <a href="https://raw.githubusercontent.com/GinckL/vram-fit/HEAD/llms.txt">llms.txt</a> · <a href="https://raw.githubusercontent.com/GinckL/vram-fit/HEAD/llms-full.txt">llms-full.txt</a> · <a href="https://github.com/GinckL/vram-fit/blob/HEAD/CITATION.cff">Cite</a></p>
   </section>
 
-  <footer>vram-fit is MIT-licensed. Memory figures are exact for GGUF headers and typically within ~1 % from config.json; tokens/s are bandwidth-model estimates (±20 %).</footer>
+  <footer>Created by <strong>Azimxon Vaxobov (Ginckl)</strong> · <a href="https://azimxonvaxobov.netlify.app">Website</a> · <a href="https://www.linkedin.com/in/azimxon-vaxobov/">LinkedIn</a> · <a href="https://t.me/A_Vakhobov">Telegram</a> · <a href="https://github.com/GinckL">GitHub</a><br>vram-fit is MIT-licensed. Memory figures are exact for GGUF headers and typically within ~1 % from config.json; tokens/s are bandwidth-model estimates (±20 %).</footer>
 </div>
 </body>
 </html>

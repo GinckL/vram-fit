@@ -4,13 +4,14 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "vram-fit"
-version = "0.1.0"
+dynamic = ["version"]
 description = "Exact VRAM calculator and launch-command tuner for local LLMs: KV cache, context length, GQA, quantization (GGUF Q4_K_M, EXL2, AWQ, GPTQ, FP8) and LoRA/QLoRA fine-tuning memory, computed from config.json / GGUF headers without downloading weights."
 readme = "README.md"
 requires-python = ">=3.9"
 license = "MIT"
 license-files = ["LICENSE"]
-authors = [{ name = "GinckL" }]
+authors = [{ name = "Azimxon Vaxobov (Ginckl)" }]
+maintainers = [{ name = "Azimxon Vaxobov (Ginckl)" }]
 keywords = [
   "vram-calculator",
   "gpu-memory-calculator",
@@ -74,14 +75,20 @@ vram-fit = "vram_fit.cli:main"
 [project.urls]
 Homepage = "https://github.com/GinckL/vram-fit"
 Documentation = "https://github.com/GinckL/vram-fit#readme"
-"LLM Docs" = "https://github.com/GinckL/vram-fit/blob/main/llms-full.txt"
+"LLM Docs" = "https://github.com/GinckL/vram-fit/blob/HEAD/llms-full.txt"
 Issues = "https://github.com/GinckL/vram-fit/issues"
+"Author website" = "https://azimxonvaxobov.netlify.app"
+"Author LinkedIn" = "https://www.linkedin.com/in/azimxon-vaxobov/"
+"Author Telegram" = "https://t.me/A_Vakhobov"
+
+[tool.setuptools.dynamic]
+version = { attr = "vram_fit.__version__" }
 
 [tool.setuptools.packages.find]
 where = ["src"]
 
 [tool.setuptools.package-data]
-vram_fit = ["web/dist/**/*"]
+vram_fit = ["py.typed", "web/dist/**/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

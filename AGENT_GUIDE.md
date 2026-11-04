@@ -111,7 +111,7 @@ curl -s localhost:7860/api/estimate -H 'content-type: application/json' \
 
 ## Model reference formats accepted
 
-`org/repo` · `org/repo:Q4_K_M` (GGUF repo + quant) · `org/repo/path/file.gguf` · `https://huggingface.co/org/repo/blob/main/file.gguf` · any `https://…/file.gguf` that supports Range · `./model.gguf` (split files auto-detected) · `./model-dir/` or `./config.json` · aliases from `vram-fit catalog` (`llama3.1-8b`, `qwen3-30b-a3b`, `gpt-oss-20b`, `deepseek-v3`, …).
+`org/repo` · `org/repo:Q4_K_M` (GGUF repo + quant) · `org/repo/path/file.gguf` · `https://huggingface.co/org/repo/blob/HEAD/file.gguf` · any `https://…/file.gguf` that supports Range · `./model.gguf` (split files auto-detected) · `./model-dir/` or `./config.json` · aliases from `vram-fit catalog` (`llama3.1-8b`, `qwen3-30b-a3b`, `gpt-oss-20b`, `deepseek-v3`, …).
 
 ## Working on this repository
 

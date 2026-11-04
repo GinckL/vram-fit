@@ -77,40 +77,41 @@ class BytesSource(ByteSource):
 
 
 class _Cursor:
-    """Sequential reader with a growing read-ahead window over a ByteSource."""
+    """Sequential reader over a ByteSource that buffers the header prefix from offset 0.
+
+    Every byte is fetched exactly once (read-ahead grows geometrically, so a 16 MB
+    tokenizer array costs a handful of round trips), and the buffered prefix can be
+    cached verbatim once parsing ends.
+    """
 
     def __init__(self, src: ByteSource, chunk: int = 512 * 1024):
         self.src = src
         self.pos = 0
-        self._buf = b""
-        self._buf_start = 0
+        self.data = bytearray()
         self._chunk = chunk
 
     def _ensure(self, n: int) -> None:
         end_needed = self.pos + n
-        buf_end = self._buf_start + len(self._buf)
-        if self.pos >= self._buf_start and end_needed <= buf_end:
+        if end_needed <= len(self.data):
             return
         if end_needed > MAX_HEADER_BYTES:
             raise GGUFError("GGUF header exceeds 256 MiB; refusing to read further")
-        start = self.pos
-        want = max(n, self._chunk)
-        data = self.src.read_at(start, want)
-        if len(data) < n:
-            raise GGUFError("unexpected end of GGUF data while reading header")
-        self._buf = data
-        self._buf_start = start
-        # read-ahead grows geometrically so huge vocab arrays need few round trips
-        self._chunk = min(self._chunk * 2, 16 * 1024 * 1024)
+        while len(self.data) < end_needed:
+            want = max(end_needed - len(self.data), self._chunk)
+            got = self.src.read_at(len(self.data), want)
+            if not got:
+                raise GGUFError("unexpected end of GGUF data while reading header")
+            self.data += got
+            self._chunk = min(self._chunk * 2, 16 * 1024 * 1024)
 
     def read(self, n: int) -> bytes:
         self._ensure(n)
-        off = self.pos - self._buf_start
-        out = self._buf[off: off + n]
+        out = bytes(self.data[self.pos: self.pos + n])
         self.pos += n
         return out
 
     def skip(self, n: int) -> None:
+        self._ensure(n)
         self.pos += n
 
     def unpack(self, fmt: str):
@@ -158,6 +159,7 @@ class GGUFHeader:
     alignment: int = 32
     array_lengths: Dict[str, int] = field(default_factory=dict)
     file_size: Optional[int] = None
+    raw: Optional[bytes] = field(default=None, repr=False)  # verbatim header bytes (keep_raw=True)
 
     @property
     def architecture(self) -> str:
@@ -229,7 +231,7 @@ def _read_value(cur: _Cursor, vtype: int, version: int, key: str, arr_lens: Dict
     raise GGUFError(f"unsupported GGUF value type {vtype} for key {key}")
 
 
-def parse_header(src: ByteSource) -> GGUFHeader:
+def parse_header(src: ByteSource, keep_raw: bool = False) -> GGUFHeader:
     cur = _Cursor(src)
     magic = cur.read(4)
     if magic != GGUF_MAGIC:
@@ -268,6 +270,7 @@ def parse_header(src: ByteSource) -> GGUFHeader:
     alignment = int(meta.get("general.alignment", 32) or 32)
     header_end = cur.pos
     return GGUFHeader(
+        raw=bytes(cur.data[:header_end]) if keep_raw else None,
         version=version,
         metadata=meta,
         tensors=tensors,

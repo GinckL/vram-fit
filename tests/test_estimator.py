@@ -141,3 +141,33 @@ def test_cpu_only():
     r = estimate(lm(), cpu_only_gpu(60, 16), Settings(context=4096), limits=False)
     assert r["status"] == "offload" and r["gpu_total_mib"] == 0
     assert 3 < r["performance"]["decode_tok_s"] < 30
+
+
+def test_ngl_counts_output_head_like_llama_cpp():
+    # llama.cpp load_tensors: i_gpu_start = max(n_layer + 1 - ngl, 0); layer index n_layer is the output head
+    m, g = lm(), parse_gpu_spec("rtx-4090")
+    one = estimate(m, g, Settings(context=4096, gpu_layers=1), limits=False)["offload"]
+    assert one["output_on_gpu"] and one["layers_on_gpu"] == 0
+    n = estimate(m, g, Settings(context=4096, gpu_layers=32), limits=False)["offload"]
+    assert n["output_on_gpu"] and n["layers_on_gpu"] == 31
+    full = estimate(m, g, Settings(context=4096, gpu_layers=33), limits=False)["offload"]
+    assert full["layers_on_gpu"] == 32
+    zero = estimate(m, g, Settings(context=4096, gpu_layers=0), limits=False)["offload"]
+    assert not zero["output_on_gpu"] and zero["layers_on_gpu"] == 0
+
+
+@pytest.mark.parametrize("bad", [
+    {"ctx": "lots"}, {"ctx": 10}, {"batch": 0}, {"batch": True}, {"gpu_mem_util": 1.5}, {"ubatch": 2.5},
+    {"optimizer": "rmsprop2"}, {"gc": "sometimes"}, {"lora_targets": ["qkv_magic"]}, {"mode": "pretrain"},
+    {"engine": "tensorrt-foo"}, {"flash_attention": "maybe"},
+])
+def test_settings_validation_rejects_bad_input(bad):
+    with pytest.raises(ValueError):
+        Settings.from_dict(bad)
+
+
+def test_settings_coerces_json_types():
+    s = Settings.from_dict({"ctx": "32768", "batch": 2.0, "kv": 8, "fa": "false", "ngl": "20",
+                            "lora_targets": "q_proj,v_proj"})
+    assert s.context == 32768 and s.batch == 2 and s.kv_cache == "8" and s.flash_attention is False
+    assert s.gpu_layers == 20 and s.lora_targets == ["q_proj", "v_proj"]

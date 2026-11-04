@@ -19,7 +19,7 @@ from .ggml import KV_CACHE_TYPES
 from .hardware import DEFAULT_RAM_BW_GBS, HardwareProfile
 from .model import LoadedModel
 from .presets import GPU
-from .quant import QuantContext, QuantScheme, default_quant, get_quant
+from .quant import QuantScheme, default_quant, get_quant, make_quant_context
 from .tensors import ATTN_KINDS, DEFAULT_LORA_TARGETS, EXPERT_KINDS, LORA_TARGET_KINDS, SHARED_EXPERT_KINDS
 
 MiB = 1024 * 1024
@@ -102,6 +102,9 @@ class Settings:
 
     @classmethod
     def from_dict(cls, d: dict) -> "Settings":
+        """Build validated settings from untrusted JSON (API / WebSocket). Raises ValueError on bad input."""
+        if d is not None and not isinstance(d, dict):
+            raise ValueError("settings must be a JSON object")
         known = {f for f in cls.__dataclass_fields__}  # type: ignore[attr-defined]
         aliases = {"ctx": "context", "context_length": "context", "ngl": "gpu_layers", "kv": "kv_cache",
                    "kv_bits": "kv_cache", "kv_type": "kv_cache", "fa": "flash_attention",
@@ -112,11 +115,88 @@ class Settings:
             if k in known:
                 clean[k] = v
         s = cls(**clean)
-        if s.kv_cache is not None and not isinstance(s.kv_cache, str):
-            s.kv_cache = str(int(s.kv_cache))
-        if s.gpu_layers is not None:
-            s.gpu_layers = int(s.gpu_layers)
+        s.validate()
         return s
+
+    def validate(self) -> "Settings":
+        """Coerce types and check ranges in place; raises ValueError with a readable message."""
+        def as_int(name, lo, hi, optional=False):
+            v = getattr(self, name)
+            if v is None and optional:
+                return
+            if isinstance(v, bool):
+                raise ValueError(f"{name} must be an integer")
+            try:
+                iv = int(float(v)) if isinstance(v, (int, float, str)) else None
+            except (TypeError, ValueError):
+                iv = None
+            if iv is None or (isinstance(v, float) and not float(v).is_integer()):
+                raise ValueError(f"{name} must be an integer, got {v!r}")
+            if not lo <= iv <= hi:
+                raise ValueError(f"{name} must be between {lo:,} and {hi:,}, got {iv:,}")
+            setattr(self, name, iv)
+
+        def as_float(name, lo, hi, optional=False):
+            v = getattr(self, name)
+            if v is None and optional:
+                return
+            try:
+                fv = float(v)
+            except (TypeError, ValueError):
+                raise ValueError(f"{name} must be a number, got {v!r}") from None
+            if fv != fv or not lo <= fv <= hi:
+                raise ValueError(f"{name} must be between {lo:g} and {hi:g}, got {fv:g}")
+            setattr(self, name, fv)
+
+        def as_bool(name):
+            v = getattr(self, name)
+            if isinstance(v, str):
+                if v.strip().lower() in ("1", "true", "yes", "on"):
+                    v = True
+                elif v.strip().lower() in ("0", "false", "no", "off"):
+                    v = False
+                else:
+                    raise ValueError(f"{name} must be true or false, got {v!r}")
+            setattr(self, name, bool(v))
+
+        self.engine = normalize_engine(str(self.engine))
+        if self.mode not in MODES:
+            raise ValueError(f"mode must be one of {', '.join(MODES)}, got {self.mode!r}")
+        as_int("context", 64, 16_777_216)
+        as_int("batch", 1, 4096)
+        as_int("gpu_layers", 0, 100_000, optional=True)
+        as_int("cpu_moe_layers", 0, 100_000)
+        as_int("ubatch", 1, 65_536)
+        as_int("lora_rank", 1, 65_536)
+        as_int("grad_accum", 1, 1_000_000)
+        as_int("max_batched_tokens", 1, 16_777_216, optional=True)
+        as_int("dataset_tokens", 1, 10**15, optional=True)
+        as_float("lora_dropout", 0.0, 1.0)
+        as_float("gpu_mem_util", 0.05, 1.0)
+        as_float("background_mib", 0.0, 10**8, optional=True)
+        as_float("ram_total_gib", 0.0, 10**6, optional=True)
+        as_float("ram_bandwidth_gbs", 0.1, 10**5, optional=True)
+        for b in ("flash_attention", "enforce_eager", "swa_full"):
+            as_bool(b)
+        if self.kv_cache is not None:
+            if isinstance(self.kv_cache, bool):
+                raise ValueError("kv_cache must be a type name or bit width")
+            self.kv_cache = str(int(self.kv_cache)) if isinstance(self.kv_cache, (int, float)) else str(self.kv_cache)
+        if self.quant is not None:
+            self.quant = str(self.quant)
+        if str(self.optimizer).lower() not in OPTIMIZERS:
+            raise ValueError(f"unknown optimizer {self.optimizer!r}; choose from {', '.join(OPTIMIZERS)}")
+        if self.grad_checkpointing is not None and self.grad_checkpointing not in GC_MODES:
+            raise ValueError(f"grad_checkpointing must be one of {', '.join(GC_MODES)}")
+        if self.lora_targets is not None:
+            if isinstance(self.lora_targets, str):
+                self.lora_targets = [x.strip() for x in self.lora_targets.split(",") if x.strip()]
+            if not isinstance(self.lora_targets, list) or not all(isinstance(x, str) for x in self.lora_targets):
+                raise ValueError("lora_targets must be a list of module names")
+            bad = [x for x in self.lora_targets if x not in LORA_TARGET_KINDS]
+            if bad:
+                raise ValueError(f"unknown LoRA target(s) {bad}; choose from {', '.join(LORA_TARGET_KINDS)}")
+        return self
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -167,8 +247,7 @@ def weights_profile(model: LoadedModel, quant: QuantScheme, engine: str) -> Weig
         return hit
     s = model.spec
     L = s.num_layers
-    qc = QuantContext(n_layer=L, n_expert=s.num_experts, n_gqa=s.gqa_ratio,
-                      has_output=not s.tie_embeddings, arch=s.model_type)
+    qc = make_quant_context(s, model.inventory)
     exact = bool(model.exact and model.native_quant and model.native_quant.upper() == quant.name.upper())
     gguf_engine = engine in GGUF_ENGINES
     keep_tied_head = engine in GGUF_ENGINES or engine == "exllamav2"
@@ -453,6 +532,11 @@ def optimizer_bytes(name: str, trainable: int, mats: List[Tuple[int, int, int]])
 # Main entry point
 # ---------------------------------------------------------------------------
 
+def _first_gpu_layer(n_layer: int, ngl: int) -> int:
+    """llama.cpp load_tensors: i_gpu_start = max(n_layer + 1 - n_gpu_layers, 0); index n_layer is the output head."""
+    return min(n_layer, max(n_layer + 1 - ngl, 0))
+
+
 def _attn_span_sum(s, ctx: int) -> float:
     """Sum over attention layers of the average causal span a token attends to."""
     tot = 0.0
@@ -494,8 +578,7 @@ def _model_dtype_bytes(model: LoadedModel) -> float:
 
 def estimate(model: LoadedModel, gpu: GPU, settings: Settings, hw: Optional[HardwareProfile] = None,
              limits: bool = True) -> dict:
-    st = replace(settings)
-    st.engine = normalize_engine(st.engine)
+    st = replace(settings).validate()
     warnings: List[str] = []
     notes: List[str] = list(model.notes)
     s = model.spec
@@ -599,7 +682,7 @@ def estimate(model: LoadedModel, gpu: GPU, settings: Settings, hw: Optional[Hard
         gpu_w_act = cpu_w_act = 0.0
         gpu_kv = cpu_kv = 0
         layer_map = []
-        first_gpu = L - min(ngl, L)
+        first_gpu = _first_gpu_layer(L, ngl)
         cat = dict(attention=0, mlp=0, experts=0, norms_other=0, embeddings=0, lm_head=0, vision=0)
         for i in range(L):
             on_gpu = i >= first_gpu
@@ -624,7 +707,7 @@ def estimate(model: LoadedModel, gpu: GPU, settings: Settings, hw: Optional[Hard
                               "kv_mib": round(kv_bytes[i] / MiB, 2),
                               "device": "gpu" if on_gpu and exp_on_gpu else ("split" if on_gpu else "cpu"),
                               "type": s.layer_types[i] if i < len(s.layer_types) else "full"})
-        head_gpu = has_gpu and ngl > L
+        head_gpu = has_gpu and ngl >= 1  # llama.cpp counts the output head as one of the -ngl layers
         if st.engine not in GGUF_ENGINES:
             head_gpu = has_gpu
         embed_gpu = has_gpu and quant.embed_on_gpu and st.engine not in GGUF_ENGINES
@@ -669,7 +752,9 @@ def estimate(model: LoadedModel, gpu: GPU, settings: Settings, hw: Optional[Hard
                                   (kt or "f16") not in ("f16", "bf16", "f32"), batch)
             return c["gpu"], c["host_output"], c
         if st.engine == "vllm":
-            T = st.max_batched_tokens or max(2048, min(8192, ctx))
+            # `vllm serve` default (EngineArgs usage-context defaults): 8192 on >=70 GB non-A100 GPUs, else 2048
+            big = gpu.vram_gib >= 70 and "a100" not in gpu.name.lower()
+            T = st.max_batched_tokens or (8192 if big else 2048)
             v = vllm_activations(model, T, max(batch, 1))
             return v["gpu"] * n, 0, v
         if st.engine == "exllamav2":
@@ -795,7 +880,7 @@ def estimate(model: LoadedModel, gpu: GPU, settings: Settings, hw: Optional[Hard
 
     def kv_read(pos: int, on_gpu: bool) -> float:
         tot = 0.0
-        first_gpu = L - min(plan["ngl"], L)
+        first_gpu = _first_gpu_layer(L, plan["ngl"])
         for i in range(L):
             if (i >= first_gpu) != on_gpu:
                 continue
@@ -819,7 +904,7 @@ def estimate(model: LoadedModel, gpu: GPU, settings: Settings, hw: Optional[Hard
             scale = uniq / frac if frac else 1.0
         else:
             scale = 1.0
-        exp_total_gpu = sum(prof.layer_expert_bytes[i] for i in range(L - min(plan["ngl"], L), L) if i >= plan["cpu_moe"])
+        exp_total_gpu = sum(prof.layer_expert_bytes[i] for i in range(_first_gpu_layer(L, plan["ngl"]), L) if i >= plan["cpu_moe"])
         exp_total_cpu = sum(prof.layer_expert_bytes) - exp_total_gpu
         # small per-token expert GEMVs reach ~half the bandwidth of dense layers
         moe_pen = 1.0 / 0.6 if s.is_moe else 1.0
@@ -948,7 +1033,7 @@ def estimate(model: LoadedModel, gpu: GPU, settings: Settings, hw: Optional[Hard
             "cpu_buffers_mib": round(act_cpu / MiB, 1),
             "ram_total_mib": round(cpu_total / MiB, 1),
             "spill_mib": round(overflow / MiB, 1),
-            "layers_on_gpu": min(plan["ngl"], L) if has_gpu else 0,
+            "layers_on_gpu": (L - _first_gpu_layer(L, plan["ngl"])) if has_gpu else 0,
             "layers_total": L,
             "output_on_gpu": plan["head_gpu"],
         },

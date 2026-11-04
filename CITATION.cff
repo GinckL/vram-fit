@@ -13,7 +13,10 @@ abstract: >-
   throughput from memory bandwidth and compute, and searches for the fastest configuration that does
   not exceed device memory, emitting launch commands for llama.cpp, Ollama, vLLM, ExLlamaV2 and Unsloth.
 authors:
-  - alias: "GinckL"
+  - given-names: "Azimxon"
+    family-names: "Vaxobov"
+    alias: "Ginckl"
+    website: "https://azimxonvaxobov.netlify.app"
 repository-code: "https://github.com/GinckL/vram-fit"
 url: "https://github.com/GinckL/vram-fit"
 license: MIT

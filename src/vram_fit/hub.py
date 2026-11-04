@@ -170,9 +170,10 @@ def fetch_gguf_header(url: str, size: Optional[int] = None) -> GGUFHeader:
         except GGUFError:
             pass
     src = HttpRangeSource(url, size)
-    hdr = parse_header(src)
-    raw = src.read_at(0, hdr.header_bytes)
-    _cache_write(key, ".gguf", raw)
+    hdr = parse_header(src, keep_raw=True)
+    if hdr.raw is not None:
+        _cache_write(key, ".gguf", hdr.raw)
+        hdr.raw = None
     hdr.file_size = size
     return hdr
 

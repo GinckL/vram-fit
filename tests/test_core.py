@@ -6,7 +6,7 @@ from vram_fit.catalog import CATALOG, lookup
 from vram_fit.ggml import ggml_type
 from vram_fit.gguf import parse_bytes
 from vram_fit.model import model_from_gguf, model_from_hf_config
-from vram_fit.quant import QuantContext, get_quant, quant_from_filename, quant_from_hf_config
+from vram_fit.quant import get_quant, make_quant_context, quant_from_filename, quant_from_hf_config
 
 from helpers import make_gguf_bytes
 
@@ -18,8 +18,7 @@ def _lm(cid):
 def _bytes(lm, quant):
     s = lm.spec
     q = get_quant(quant)
-    qc = QuantContext(n_layer=s.num_layers, n_expert=s.num_experts, n_gqa=s.gqa_ratio,
-                      has_output=not s.tie_embeddings)
+    qc = make_quant_context(s, lm.inventory)
     return sum(q.tensor_bytes(t, qc) for t in lm.inventory if not t.tied and t.kind != "vision")
 
 
@@ -69,7 +68,7 @@ def test_llama_cpp_mixing_rules():
     lm = _lm("meta-llama/Llama-3.1-8B")
     s = lm.spec
     q = get_quant("Q4_K_M")
-    qc = QuantContext(n_layer=32, n_gqa=4, has_output=True)
+    qc = make_quant_context(s, lm.inventory)
     types = {t.name: q.tensor_type(t, qc) for t in lm.inventory}
     assert types["output.weight"] == "Q6_K"
     assert types["token_embd.weight"] == "Q4_K"
@@ -85,7 +84,7 @@ def test_divisibility_fallback():
     # Qwen2.5-72B intermediate 29568 is not a multiple of 256 -> ffn_down falls back to a 32-block type
     lm = _lm("Qwen/Qwen2.5-72B")
     q = get_quant("Q4_K_M")
-    qc = QuantContext(n_layer=80, n_gqa=8)
+    qc = make_quant_context(lm.spec, lm.inventory)
     t = next(t for t in lm.inventory if t.name == "blk.10.ffn_down.weight")
     assert q.tensor_type(t, qc) in ("Q5_0", "Q8_0")
 
@@ -165,3 +164,45 @@ def test_hybrid_and_text_config_parsing():
     assert s.linear_state_bytes == 32 * 128 * 128 * 4 + (2 * 16 * 128 + 32 * 128) * 3 * 2
     assert math.isclose(s.kv_elems_per_token(3), 2 * 256 * 2)
     assert s.kv_elems_per_token(0) == 0
+
+
+def test_llama_70b_rule_and_published_size():
+    # llama.cpp bumps attn_v of 80-layer GQA llama/qwen2 models (LLM_TYPE_70B) from Q4_K to Q5_K
+    lm = _lm("meta-llama/Llama-3.3-70B-Instruct")
+    q = get_quant("Q4_K_M")
+    qc = make_quant_context(lm.spec, lm.inventory)
+    assert qc.is_70b
+    t = next(t for t in lm.inventory if t.name == "blk.20.attn_v.weight")
+    assert q.tensor_type(t, qc) in ("Q5_K", "Q6_K")
+    assert _bytes(lm, "Q4_K_M") == pytest.approx(42.52e9, rel=0.003)  # published file ~42.52 GB
+
+
+def test_moe_and_iq_rules():
+    mix = _lm("mistralai/Mixtral-8x7B-v0.1")
+    qc = make_quant_context(mix.spec, mix.inventory)
+    types = {t.name: get_quant("Q4_K_M").tensor_type(t, qc) for t in mix.inventory}
+    assert types["blk.3.attn_v.weight"] == "Q8_0" and types["blk.3.attn_k.weight"] == "Q8_0"
+    assert types["blk.3.attn_output.weight"] == "Q5_K"
+    assert types["blk.3.ffn_gate_inp.weight"] == "F32"           # routers are never quantized
+    llama = _lm("meta-llama/Llama-3.1-8B")
+    qc = make_quant_context(llama.spec, llama.inventory)
+    tt = {t.name: get_quant("IQ2_M").tensor_type(t, qc) for t in llama.inventory}
+    assert tt["token_embd.weight"] == "IQ3_S" and tt["output.weight"] == "Q5_K"
+    assert tt["blk.0.ffn_down.weight"] == "IQ3_S" and tt["blk.10.ffn_down.weight"] == "IQ2_S"
+
+
+def test_real_llama_cpp_gguf_files():
+    """Optional: point VRAM_FIT_REAL_GGUF_DIR at llama.cpp's models/ggml-vocab-*.gguf files."""
+    import glob
+    import os
+    d = os.environ.get("VRAM_FIT_REAL_GGUF_DIR")
+    if not d:
+        pytest.skip("set VRAM_FIT_REAL_GGUF_DIR to run against real GGUF files")
+    from vram_fit.gguf import parse_file
+    files = glob.glob(os.path.join(d, "*.gguf"))
+    assert files
+    for f in files:
+        h = parse_file(f)
+        if not h.tensors:
+            assert h.header_bytes == os.path.getsize(f), f
+        assert h.array_len("tokenizer.ggml.tokens"), f

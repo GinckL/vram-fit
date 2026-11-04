@@ -1,5 +1,7 @@
 # vram-fit — exact VRAM calculator for local LLMs (inference + LoRA/QLoRA fine-tuning)
 
+Created by **Azimxon Vaxobov ([Ginckl](https://github.com/GinckL))** · [Website](https://azimxonvaxobov.netlify.app) · [LinkedIn](https://www.linkedin.com/in/azimxon-vaxobov/) · [Telegram](https://t.me/A_Vakhobov)
+
 > **TL;DR** — `CUDA out of memory` happens because nobody knows how much VRAM the weights, **KV cache**, context length, batch size, flash-attention buffers and **AdamW/LoRA optimizer states** will take on *their* GPU. **vram-fit** computes it megabyte-by-megabyte **before you download a single weight file**: it reads only `config.json` or the GGUF header (KBs to a few MB), probes your NVIDIA / AMD / Apple Silicon hardware, predicts tokens/s from memory bandwidth, and prints a tuned `llama.cpp` / `Ollama` / `vLLM` / `ExLlamaV2` / `Unsloth` command that does not OOM.
 >
 > ```bash
@@ -150,7 +152,7 @@ The KV cache grows linearly with context: `2 × layers × kv_heads × head_dim �
 Per token: `Σ_layers kv_heads × (head_dim_k × bytes_k + head_dim_v × bytes_v)`; MLA models (DeepSeek-V3/R1) store `(kv_lora_rank + rope_dim) × bytes` instead; sliding-window layers (Gemma 2/3, gpt-oss) are capped at the window; linear/SSM layers hold a fixed state. `vram-fit inspect <model>` prints KiB/token; e.g. Llama-3.1-8B is 128 KiB/token in f16 (exactly 1024.00 MiB at 8k, matching llama.cpp's log).
 
 **What `-ngl` / `--n-gpu-layers` should I use?**
-`vram-fit estimate <model> --gpu auto -c 8k` computes the maximum number of layers that fit (llama.cpp semantics: last *n* layers on GPU, the output head only when `ngl > n_layer`, token embeddings always in RAM) and reports the RAM-bandwidth-bound tok/s you get with the rest on the CPU.
+`vram-fit estimate <model> --gpu auto -c 8k` computes the maximum number of layers that fit (llama.cpp semantics: `-ngl n` puts the output head plus the last *n−1* repeating layers on the GPU, token embeddings always stay in RAM) and reports the RAM-bandwidth-bound tok/s you get with the rest on the CPU.
 
 **Which GGUF quant should I download for 8 GB / 12 GB / 16 GB / 24 GB of VRAM?**
 `vram-fit matrix <gguf-repo> --gpu <preset>` reads the real file list of the repo and shows every quant × context cell as fits / tight / offload / spill / oom with decode tok/s; `vram-fit fit` picks the best quality that fits fully, penalising configs above 92 % of VRAM.
@@ -206,9 +208,14 @@ Checked by the test suite (`tests/test_core.py`, `tests/test_estimator.py`):
 | Llama-3.1-8B Q8_0 | 8,532,934,656 B | 8,540,770,784 B | −0.09 % |
 | Qwen2.5-7B Q4_K_M | 4,677,120,000 B | 4,683,073,504 B | −0.13 % |
 | Qwen2.5-32B Q4_K_M | 19,845,357,568 B | 19,851,336,256 B | −0.03 % |
+| Llama-3.3-70B Q4_K_M (llama.cpp 70B `attn_v` rule) | 42,512,531,456 B | ≈ 42.52 GB GGUF file | ≈ −0.02 % |
 | Llama-3-8B KV cache, 8192 ctx, f16 | 1024.00 MiB | llama.cpp `KV self size = 1024.00 MiB` | 0 |
 | LoRA r=16 all-linear trainable params, Llama-3-8B | 41,943,040 | PEFT `print_trainable_parameters` | 0 |
 | Parameter counts (8B, 70B, 72B, Mixtral, DeepSeek-V3 671B, Qwen3-30B-A3B, gpt-oss-20b, Gemma-2-9B) | — | model cards | < 1 % |
+
+The "≈ tokenizer header" gap is real: llama.cpp's own `ggml-vocab-llama-bpe.gguf` (the Llama-3 tokenizer header, no tensors) is 7,818,140 bytes, and the 8B gap is 7,841,184 bytes (tokenizer + tensor-info entries).
+
+**Validated against upstream sources** (release 0.1.0): the GGUF parser reads all 19 real `ggml-vocab-*.gguf` files shipped with llama.cpp to their exact last byte (GGUF v2 and v3, up to 262k-token vocabularies; run with `VRAM_FIT_REAL_GGUF_DIR=…/llama.cpp/models pytest`); the k-quant mixing rules and `-ngl` placement are ported from llama.cpp's `llama-quant.cpp` / `llama-model.cpp`; every generated flag was checked against llama.cpp `common/arg.cpp`, vLLM 0.33 `EngineArgs`, TRL `SFTConfig`, Unsloth, PEFT, ExLlamaV2 `convert_exl2` and the `hf` CLI.
 
 Throughput numbers are estimates calibrated on public llama-bench / vLLM single-stream results (e.g. Llama-3-8B Q4_K_M on RTX 4090 ≈ 127 tok/s predicted); expect ±20 %.
 
@@ -222,7 +229,7 @@ All values are MiB (2²⁰ bytes). `L` layers, `H` hidden, `n_h` heads, `n_kv` K
 - **vLLM** — budget = `gpu_memory_utilization × VRAM`; activation peak at `max_num_batched_tokens`; CUDA graphs 0.5 GiB (0 with `--enforce-eager`), NCCL per GPU for TP; remaining budget = KV pool → max concurrency at your context.
 - **Training** — activations per token per layer (bf16, FA2): `2(4H + 2q + kv + 4I) + 4n_h` bytes (MoE: `4·k·I_moe`), times `L` without checkpointing; standard checkpointing keeps `L·T·2H` plus two layers' worth; Unsloth offloads the checkpoints to RAM. Logits `T·V·12` B for HF (fp32 upcast + grad), `T·V·2` for Unsloth's fused CE. LoRA: `r·(in+out)` per targeted matrix, fp32 weights + grads + optimizer. Full FT: bf16 weights + bf16 grads + fp32 master + optimizer. 7 % allocator fragmentation.
 - **Overhead** — CUDA context 300 MiB (llama.cpp) / 500 MiB (PyTorch engines), ROCm 400–600, Metal 120–300, plus VRAM already used by other processes (probed).
-- **Placement** — llama.cpp `-ngl n`: last `n` layers (+ their KV) on GPU, output head iff `n > L`, token embeddings in RAM; `--n-cpu-moe N`: experts of layers `< N` in RAM.
+- **Placement** — llama.cpp `-ngl n` (`i_gpu_start = n_layer + 1 − n`): output head + last `n−1` layers (+ their KV) on GPU, token embeddings in RAM; `--n-cpu-moe N`: experts of layers `< N` in RAM.
 - **Speed** — decode step = `GPU_bytes/(BW·η_gpu) + RAM_bytes/(BW_ram·0.7) + spill/(PCIe·0.8) + L·12 µs (+ TP all-reduce)`, max with compute time; MoE reads only the `k/E` active experts (expected union for batches). Prefill = `(2·P_active + 4·n_h·d·Σspan) / (TFLOPS·η)` + PCIe streaming of RAM-resident weights per ubatch.
 
 ## CLI reference
@@ -236,7 +243,7 @@ vram-fit hw               probe GPUs, RAM, PCIe, CPU
 vram-fit presets          GPU presets (--vendor nvidia|amd|apple|intel)
 vram-fit quants           quantization formats (--engine ...)
 vram-fit catalog          built-in offline architectures + aliases
-vram-fit serve            HTTP + WebSocket API (--host 127.0.0.1 --port 7860)
+vram-fit serve            HTTP + WebSocket API (--host 127.0.0.1 --port 7860 [--allow-local-files])
 vram-fit version
 ```
 
@@ -287,6 +294,8 @@ print(build_command(model, train)["files"]["train.py"])
 
 `pip install "vram-fit[server]" && vram-fit serve` → `http://127.0.0.1:7860` (OpenAPI at `/docs`).
 
+Security: on loopback (default) the server only answers `Host: localhost/127.0.0.1` (blocks DNS rebinding) and CORS is limited to local origins. With `--host 0.0.0.0` there is no authentication, so local model paths are refused unless you pass `--allow-local-files`. All request settings are validated (bad input → HTTP 400 / WebSocket `error` event).
+
 | Method | Path | Body / query |
 |---|---|---|
 | GET | `/api/health`, `/api/hardware?refresh=1`, `/api/presets`, `/api/quants?engine=`, `/api/engines`, `/api/catalog`, `/api/telemetry` | — |
@@ -326,9 +335,20 @@ src/vram_fit/
 
 ```bash
 pip install -e ".[dev]"
-pytest -q                     # 72 tests: parser, quant rules, KV/activation math, hub over a local Range server, CLI JSON, REST, WebSocket, JSON schema
+pytest -q                     # 91 tests: parser, quant rules, KV/activation math, hub over a local Range server, CLI JSON, REST, WebSocket, JSON schema
 python scripts/build_llms_full.py   # regenerate llms-full.txt from the docs + live CLI reference
 ```
+
+## Author & credits
+
+**vram-fit** is created and maintained by **Azimxon Vaxobov**, known as **Ginckl**.
+
+- Website: [azimxonvaxobov.netlify.app](https://azimxonvaxobov.netlify.app)
+- LinkedIn: [in/azimxon-vaxobov](https://www.linkedin.com/in/azimxon-vaxobov/)
+- Telegram: [@A_Vakhobov](https://t.me/A_Vakhobov)
+- GitHub: [GinckL](https://github.com/GinckL)
+
+If vram-fit saved you a download or an OOM, a star on the repo and a mention of the author are appreciated. See also [AUTHORS.md](AUTHORS.md).
 
 ## Citing
 
@@ -336,4 +356,4 @@ See [CITATION.cff](CITATION.cff) (GitHub shows a "Cite this repository" button).
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+MIT © 2026 Azimxon Vaxobov (Ginckl) — see [LICENSE](LICENSE).

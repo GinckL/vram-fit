@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import sys
 from dataclasses import replace
@@ -316,13 +317,15 @@ def cmd_serve(a: argparse.Namespace) -> int:
     if a.json:
         _emit(a, {"vram_fit": __version__, "command": "serve",
                   "result": {"url": f"http://{a.host}:{a.port}", "websocket": f"ws://{a.host}:{a.port}/ws"}}, "")
-    run(host=a.host, port=a.port, open_browser=a.open)
+    run(host=a.host, port=a.port, open_browser=a.open, allow_local_files=True if a.allow_local_files else None)
     return EXIT_OK
 
 
 def cmd_version(a: argparse.Namespace) -> int:
-    _emit(a, {"vram_fit": __version__, "command": "version", "result": {"version": __version__,
-              "python": sys.version.split()[0]}}, f"vram-fit {__version__}")
+    from . import __author__, __url__
+    _emit(a, {"vram_fit": __version__, "command": "version", "result": {
+        "version": __version__, "python": sys.version.split()[0], "author": __author__, "url": __url__}},
+        f"vram-fit {__version__} — by {__author__} — {__url__}")
     return EXIT_OK
 
 
@@ -335,10 +338,11 @@ def build_parser() -> argparse.ArgumentParser:
                "  vram-fit estimate Qwen/Qwen2.5-14B-Instruct --gpu rtx-4070 -q Q4_K_M -c 32k --kv 8\n"
                "  vram-fit fit bartowski/Qwen2.5-14B-Instruct-GGUF --gpu auto -c 16k\n"
                "  vram-fit fit meta-llama/Llama-3.1-8B --mode qlora --engine unsloth -c 4k --gpu rtx-3060-12gb\n"
-               "  vram-fit matrix llama3.1-70b --gpu 2x rtx-3090 --contexts 4k,16k,32k,128k --json\n",
+               "  vram-fit matrix llama3.1-70b --gpu \"2x rtx-3090\" --contexts 4k,16k,32k,128k --json\n\n"
+               "Created by Azimxon Vaxobov (Ginckl) - https://github.com/GinckL/vram-fit\n",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    p.add_argument("--version", action="version", version=f"vram-fit {__version__}")
+    p.add_argument("--version", action="version", version=f"vram-fit {__version__} (Azimxon Vaxobov / Ginckl)")
     sub = p.add_subparsers(dest="cmd", metavar="COMMAND")
 
     e = sub.add_parser("estimate", aliases=["est"], help="VRAM breakdown + tok/s for one configuration")
@@ -386,6 +390,8 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--host", default="127.0.0.1")
     s.add_argument("--port", type=int, default=7860)
     s.add_argument("--open", action="store_true", help="open the dashboard in a browser")
+    s.add_argument("--allow-local-files", action="store_true",
+                   help="allow local model paths in API requests even when --host is not loopback")
     s.add_argument("--json", action="store_true")
     s.set_defaults(func=cmd_serve)
 
@@ -404,7 +410,9 @@ def main(argv: Optional[List[str]] = None) -> int:
         return EXIT_OK
     try:
         return a.func(a)
-    except (HubError, GGUFError, KeyError, ValueError, OSError) as exc:
+    except (HubError, GGUFError, KeyError, ValueError, TypeError, OSError) as exc:
+        if os.environ.get("VRAM_FIT_DEBUG"):
+            raise
         msg = exc.args[0] if isinstance(exc, KeyError) and exc.args else str(exc)
         if getattr(a, "json", False):
             json.dump({"vram_fit": __version__, "command": a.cmd,

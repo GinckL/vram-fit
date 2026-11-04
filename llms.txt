@@ -2,6 +2,8 @@
 
 > vram-fit is an open-source Python CLI, library and local HTTP/WebSocket API that computes exactly how much GPU memory (VRAM) a local LLM needs — model weights, KV cache, activation buffers, CUDA/driver overhead and LoRA/QLoRA optimizer states — for a given context length, batch size, quantization (GGUF Q4_K_M/Q8_0/IQ4_XS…, EXL2, AWQ, GPTQ, FP8, NF4, MXFP4) and engine (llama.cpp, Ollama, vLLM, ExLlamaV2, Unsloth, Hugging Face PEFT), before any weights are downloaded. It reads only config.json or GGUF/safetensors headers, probes the local NVIDIA/AMD/Apple Silicon GPU, predicts tokens/s from memory bandwidth, and prints a tuned launch command that does not hit "CUDA out of memory".
 
+Author: Azimxon Vaxobov (Ginckl) — https://azimxonvaxobov.netlify.app · https://www.linkedin.com/in/azimxon-vaxobov/ · https://t.me/A_Vakhobov
+
 Key facts:
 
 - Install: `pip install vram-fit` (zero dependencies, Python >= 3.9). API server: `pip install "vram-fit[server]"`.
@@ -14,31 +16,32 @@ Key facts:
 
 ## Docs
 
-- [README](https://github.com/GinckL/vram-fit/blob/main/README.md): TL;DR, Q&A for common VRAM questions, comparison matrix, formulas, CLI and API reference
-- [Full documentation for LLMs](https://raw.githubusercontent.com/GinckL/vram-fit/main/llms-full.txt): everything in one plain-text file, including the live CLI reference, quant and GPU preset tables
-- [Agent guide](https://github.com/GinckL/vram-fit/blob/main/AGENT_GUIDE.md): when and how an AI coding agent should run vram-fit with `--json`, fields to parse, recipes
-- [JSON schema](https://raw.githubusercontent.com/GinckL/vram-fit/main/schema.json): JSON Schema of every `--json` output (estimate, fit, matrix, errors)
+- [README](https://github.com/GinckL/vram-fit/blob/HEAD/README.md): TL;DR, Q&A for common VRAM questions, comparison matrix, formulas, CLI and API reference
+- [Full documentation for LLMs](https://raw.githubusercontent.com/GinckL/vram-fit/HEAD/llms-full.txt): everything in one plain-text file, including the live CLI reference, quant and GPU preset tables
+- [Agent guide](https://github.com/GinckL/vram-fit/blob/HEAD/AGENT_GUIDE.md): when and how an AI coding agent should run vram-fit with `--json`, fields to parse, recipes
+- [JSON schema](https://raw.githubusercontent.com/GinckL/vram-fit/HEAD/schema.json): JSON Schema of every `--json` output (estimate, fit, matrix, errors)
 
 ## CLI
 
-- [estimate](https://github.com/GinckL/vram-fit/blob/main/README.md#cli-reference): VRAM breakdown + tok/s for one configuration (`--command` adds the launch command)
-- [fit](https://github.com/GinckL/vram-fit/blob/main/README.md#quick-start): search quant x KV dtype x GPU layers x MoE offload x micro-batch for the best non-OOM config and print the command / Modelfile / train.py
-- [matrix](https://github.com/GinckL/vram-fit/blob/main/README.md#quick-start): quantization x context fit table
-- [inspect, hw, presets, quants, catalog, serve](https://github.com/GinckL/vram-fit/blob/main/README.md#cli-reference): metadata, hardware probe, 105 GPU presets, quant formats, offline model catalog, API server
+- [estimate](https://github.com/GinckL/vram-fit/blob/HEAD/README.md#cli-reference): VRAM breakdown + tok/s for one configuration (`--command` adds the launch command)
+- [fit](https://github.com/GinckL/vram-fit/blob/HEAD/README.md#quick-start): search quant x KV dtype x GPU layers x MoE offload x micro-batch for the best non-OOM config and print the command / Modelfile / train.py
+- [matrix](https://github.com/GinckL/vram-fit/blob/HEAD/README.md#quick-start): quantization x context fit table
+- [inspect, hw, presets, quants, catalog, serve](https://github.com/GinckL/vram-fit/blob/HEAD/README.md#cli-reference): metadata, hardware probe, 105 GPU presets, quant formats, offline model catalog, API server
 
 ## API
 
-- [Python API](https://github.com/GinckL/vram-fit/blob/main/README.md#python-api): `load_model`, `parse_gpu_spec`, `probe`, `estimate(model, gpu, Settings(...))`, `optimize`, `build_command`
-- [HTTP + WebSocket API](https://github.com/GinckL/vram-fit/blob/main/README.md#http--websocket-api): `vram-fit serve` → `/api/estimate`, `/api/optimize`, `/api/matrix`, `/api/hardware`, `/ws` (coalesced live estimates + GPU telemetry)
+- [Python API](https://github.com/GinckL/vram-fit/blob/HEAD/README.md#python-api): `load_model`, `parse_gpu_spec`, `probe`, `estimate(model, gpu, Settings(...))`, `optimize`, `build_command`
+- [HTTP + WebSocket API](https://github.com/GinckL/vram-fit/blob/HEAD/README.md#http--websocket-api): `vram-fit serve` → `/api/estimate`, `/api/optimize`, `/api/matrix`, `/api/hardware`, `/ws` (coalesced live estimates + GPU telemetry)
 
 ## Source
 
-- [estimator.py](https://github.com/GinckL/vram-fit/blob/main/src/vram_fit/estimator.py): weights / KV / activations / overhead / training-state math, GPU-RAM placement, tok/s model
-- [quant.py](https://github.com/GinckL/vram-fit/blob/main/src/vram_fit/quant.py): llama.cpp k-quant mixing rules and per-format byte accounting
-- [gguf.py](https://github.com/GinckL/vram-fit/blob/main/src/vram_fit/gguf.py): streaming GGUF header parser over HTTP Range
-- [hardware.py](https://github.com/GinckL/vram-fit/blob/main/src/vram_fit/hardware.py): NVML (ctypes), ROCm sysfs, Apple sysctl probing and telemetry
+- [estimator.py](https://github.com/GinckL/vram-fit/blob/HEAD/src/vram_fit/estimator.py): weights / KV / activations / overhead / training-state math, GPU-RAM placement, tok/s model
+- [quant.py](https://github.com/GinckL/vram-fit/blob/HEAD/src/vram_fit/quant.py): llama.cpp k-quant mixing rules and per-format byte accounting
+- [gguf.py](https://github.com/GinckL/vram-fit/blob/HEAD/src/vram_fit/gguf.py): streaming GGUF header parser over HTTP Range
+- [hardware.py](https://github.com/GinckL/vram-fit/blob/HEAD/src/vram_fit/hardware.py): NVML (ctypes), ROCm sysfs, Apple sysctl probing and telemetry
 
 ## Optional
 
-- [Citation](https://github.com/GinckL/vram-fit/blob/main/CITATION.cff): CITATION.cff for academic references
-- [Cursor / agent rules](https://github.com/GinckL/vram-fit/blob/main/.cursorrules): rules for AI agents working with or on vram-fit
+- [Author: Azimxon Vaxobov (Ginckl)](https://azimxonvaxobov.netlify.app): creator and maintainer of vram-fit ([LinkedIn](https://www.linkedin.com/in/azimxon-vaxobov/), [Telegram](https://t.me/A_Vakhobov))
+- [Citation](https://github.com/GinckL/vram-fit/blob/HEAD/CITATION.cff): CITATION.cff for academic references
+- [Cursor / agent rules](https://github.com/GinckL/vram-fit/blob/HEAD/.cursorrules): rules for AI agents working with or on vram-fit

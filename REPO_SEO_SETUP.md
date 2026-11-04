@@ -29,6 +29,8 @@ Post on a weekday 13:00–15:00 UTC; reply to every comment in the first 2 hours
 
 ## 4. Indexing checklist (do these the day you launch)
 
+- [ ] Merge `claude/gifted-thompson-osu24v` into a `main` branch and make `main` the default (Settings → Branches). All doc links use `blob/HEAD/…`, so they keep working whichever branch is default.
+
 - [ ] Settings → Pages → Deploy from branch `main`, folder `/docs` (serves `docs/index.html` with Schema.org JSON-LD).
 - [ ] Settings → General → Social preview: upload a 1280×640 screenshot of the VRAM bar / dashboard.
 - [ ] Publish to PyPI: create a PyPI "trusted publisher" for `GinckL/vram-fit` → workflow `release.yml`, then `git tag v0.1.0 && git push --tags`. (`pip install vram-fit`, `pipx run vram-fit`, `uvx vram-fit` only work after this.)

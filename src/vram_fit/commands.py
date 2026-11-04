@@ -50,6 +50,7 @@ def _gguf_source(model: LoadedModel, quant: str) -> Dict[str, object]:
     if not (model.source == "local-config" and model.path):
         steps.append(f"hf download {model.repo or model.id} --local-dir ./{name}")
     out = f"./{name}-{quant}.gguf"
+    steps.append("# convert_hf_to_gguf.py lives in a llama.cpp checkout (pip install -r requirements.txt)")
     if quant in ("BF16", "F16", "F32", "Q8_0"):
         steps.append(f"python convert_hf_to_gguf.py {shlex.quote(src)} --outtype {quant.lower()} --outfile {out}")
     else:
@@ -81,8 +82,9 @@ def llama_cpp_command(model: LoadedModel, est: dict, hw: Optional[HardwareProfil
     flags.append({"flag": f"-c {total_ctx}", "why": f"{ctx:,} tokens x {batch} parallel slot(s)"})
     ngl_s = "99" if ngl >= L + 1 else str(ngl)
     args += ["-ngl", ngl_s]
-    flags.append({"flag": f"-ngl {ngl_s}", "why": f"{min(ngl, L)}/{L} layers on GPU" +
-                  (" + output head" if ngl >= L + 1 else "") + " — the most that fit"})
+    off = est["offload"]
+    flags.append({"flag": f"-ngl {ngl_s}", "why": f"{off['layers_on_gpu']}/{L} layers on GPU" +
+                  (" + output head" if off["output_on_gpu"] else "") + " — the most that fit"})
     if st.get("cpu_moe_layers"):
         args += ["--n-cpu-moe", str(st["cpu_moe_layers"])]
         flags.append({"flag": f"--n-cpu-moe {st['cpu_moe_layers']}",
@@ -226,7 +228,7 @@ def exllamav2_command(model: LoadedModel, est: dict, hw: Optional[HardwareProfil
         steps.append(f"hf download {repo} --revision {bpw:g}bpw --local-dir models/{out_name}")
     else:
         steps.append(f"hf download {repo} --local-dir ./{name}")
-        steps.append(f"python convert.py -i ./{name} -o ./exl2-work -cf models/{out_name} -b {bpw:g}")
+        steps.append(f"python -m exllamav2.conversion.convert_exl2 -i ./{name} -o ./exl2-work -cf models/{out_name} -b {bpw:g}")
     cache = st["kv_cache_k"] or "FP16"
     multi = est["hardware"]["count"] > 1
     cfg = "\n".join([

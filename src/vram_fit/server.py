@@ -30,7 +30,9 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
+import re
 import threading
 import time
 import webbrowser
@@ -69,6 +71,7 @@ class State:
         self.max_models = max_models
         self.hw: Optional[HardwareProfile] = None
         self.lock = threading.Lock()
+        self.allow_local = True  # run() turns this off when the server listens on a non-loopback interface
 
     def hardware(self, refresh: bool = False) -> HardwareProfile:
         with self.lock:
@@ -91,6 +94,12 @@ class State:
 
     def model(self, ref: str, quant: Optional[str] = None, exact: bool = False) -> LoadedModel:
         """Load once per reference; GGUF repos load one extra header per requested quant file."""
+        if not isinstance(ref, str) or not ref.strip() or len(ref) > 1024:
+            raise ValueError("model must be a non-empty string (HF repo id, alias, URL or local path)")
+        ref = ref.strip()
+        if not self.allow_local and _looks_local(ref):
+            raise ValueError("local file paths are disabled because the server listens on a network interface; "
+                             "restart with --allow-local-files to permit them")
         base = self._get((ref, exact, None))
         if base is not None:
             variant = (base.source == "gguf" and quant and quant != base.native_quant
@@ -131,6 +140,14 @@ class State:
                 g = parse_gpu_spec(f"custom:{spec.get('vram_gib', 24)}:{spec.get('bandwidth_gbs', 500)}:{spec.get('tflops', 50)}")
             return _apply_overrides(g, spec), None
         raise ValueError(f"invalid gpu spec {spec!r}")
+
+
+_LOCAL_RE = re.compile(r"^(?:[A-Za-z]:[\\/]|[\\/]|\.{1,2}[\\/]|~)")
+
+
+def _looks_local(ref: str) -> bool:
+    return bool(_LOCAL_RE.match(ref)) or ref.lower().endswith((".gguf", ".json", ".safetensors")) and "/" not in ref \
+        or os.path.exists(os.path.expanduser(ref))
 
 
 def _apply_overrides(g: GPU, spec: Dict[str, Any]) -> GPU:
@@ -208,9 +225,18 @@ def engines_info() -> dict:
             "quants_by_engine": {e: [q.name for q in quants_for_engine(e)] for e in ENGINES}}
 
 
-def create_app() -> FastAPI:
+log = logging.getLogger("vram_fit.server")
+
+
+def create_app(trusted_hosts: Optional[list] = None) -> FastAPI:
     app = FastAPI(title="vram-fit", version=__version__,
-                  description="Exact VRAM / KV-cache / tokens-per-second estimator for local LLMs.")
+                  description="Exact VRAM / KV-cache / tokens-per-second estimator for local LLMs. "
+                              "Created by Azimxon Vaxobov (Ginckl).",
+                  contact={"name": "Azimxon Vaxobov (Ginckl)", "url": "https://azimxonvaxobov.netlify.app"},
+                  license_info={"name": "MIT", "url": "https://opensource.org/licenses/MIT"})
+    if trusted_hosts:
+        from starlette.middleware.trustedhost import TrustedHostMiddleware
+        app.add_middleware(TrustedHostMiddleware, allowed_hosts=trusted_hosts)
     app.add_middleware(CORSMiddleware, allow_origin_regex=r"https?://(localhost|127\.0\.0\.1|\[::1\])(:\d+)?",
                        allow_methods=["*"], allow_headers=["*"])
 
@@ -221,7 +247,7 @@ def create_app() -> FastAPI:
     def guard(fn, *args):
         try:
             return fn(*args)
-        except (KeyError, ValueError, GGUFError) as exc:
+        except (KeyError, ValueError, TypeError, GGUFError) as exc:
             raise HTTPException(status_code=400, detail=_err(exc))
 
     @app.get("/api/health")
@@ -334,14 +360,26 @@ def create_app() -> FastAPI:
                     raise ValueError(f"unknown op {op!r}")
                 await send({"event": op, "rid": rid, "data": data,
                             "ms": round((time.perf_counter() - t0) * 1000, 2)})
-            except (KeyError, ValueError, GGUFError, HubError, OSError) as exc:
-                await send({"event": "error", "rid": rid, "op": op, "message": _err(exc)})
+            except (KeyError, ValueError, TypeError, GGUFError, HubError, OSError) as exc:
+                await _safe_send({"event": "error", "rid": rid, "op": op, "message": _err(exc)})
+            except Exception:  # never let one bad request kill the connection's worker
+                log.exception("websocket op %r failed", op)
+                await _safe_send({"event": "error", "rid": rid, "op": op, "message": "internal error (see server log)"})
+
+        async def _safe_send(obj: dict) -> None:
+            try:
+                await send(obj)
+            except (RuntimeError, WebSocketDisconnect, OSError):
+                pass
 
         async def telemetry_loop(interval: float) -> None:
-            while True:
-                sample = await asyncio.to_thread(sample_telemetry)
-                await send({"event": "telemetry", "data": sample, "t": time.time()})
-                await asyncio.sleep(interval)
+            try:
+                while True:
+                    sample = await asyncio.to_thread(sample_telemetry)
+                    await send({"event": "telemetry", "data": sample, "t": time.time()})
+                    await asyncio.sleep(interval)
+            except (RuntimeError, WebSocketDisconnect, OSError):
+                return
 
         async def worker() -> None:
             while True:
@@ -394,11 +432,24 @@ def create_app() -> FastAPI:
     return app
 
 
-def run(host: str = "127.0.0.1", port: int = 7860, open_browser: bool = False) -> None:
+LOOPBACK = ("127.0.0.1", "localhost", "::1")
+
+
+def run(host: str = "127.0.0.1", port: int = 7860, open_browser: bool = False,
+        allow_local_files: Optional[bool] = None) -> None:
+    """Serve the API. On loopback, Host headers are pinned to localhost (blocks DNS rebinding);
+    on any other interface, local file paths are refused unless explicitly allowed."""
     import uvicorn
-    app = create_app()
-    url = f"http://{host}:{port}/"
-    print(f"vram-fit {__version__} API on {url}  (WebSocket {url.replace('http', 'ws')}ws, OpenAPI {url}docs)")
+    loopback = host in LOOPBACK
+    STATE.allow_local = loopback if allow_local_files is None else allow_local_files
+    trusted = ["127.0.0.1", "localhost", "::1", "[::1]"] if loopback else None
+    app = create_app(trusted_hosts=trusted)
+    shown = "localhost" if host in ("0.0.0.0", "::") else host
+    url = f"http://{shown}:{port}/"
+    print(f"vram-fit {__version__} API on {url}  (WebSocket {url.replace('http', 'ws', 1)}ws, OpenAPI {url}docs)")
+    if not loopback:
+        print(f"warning: listening on {host} without authentication; anyone who can reach this port can use the API"
+              + ("" if STATE.allow_local else " (local file paths disabled)"))
     if open_browser:
         threading.Timer(1.0, lambda: webbrowser.open(url)).start()
     uvicorn.run(app, host=host, port=port, log_level="warning")

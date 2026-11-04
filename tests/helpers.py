@@ -4,7 +4,7 @@ from vram_fit.catalog import CATALOG
 from vram_fit.ggml import ggml_type
 from vram_fit.gguf import GGUFTensorInfo, build_header
 from vram_fit.model import model_from_hf_config
-from vram_fit.quant import QuantContext, get_quant
+from vram_fit.quant import get_quant, make_quant_context
 
 FTYPE_IDS = {"Q4_K_M": 15, "Q8_0": 7, "Q6_K": 18, "Q5_K_M": 17}
 
@@ -13,8 +13,7 @@ def make_gguf_bytes(catalog_id="meta-llama/Llama-3.2-1B", quant="Q4_K_M", vocab_
     lm = model_from_hf_config(CATALOG[catalog_id], catalog_id)
     s = lm.spec
     q = get_quant(quant)
-    qc = QuantContext(n_layer=s.num_layers, n_expert=s.num_experts, n_gqa=s.gqa_ratio,
-                      has_output=not s.tie_embeddings)
+    qc = make_quant_context(s, lm.inventory)
     tensors = []
     off = 0
     for t in lm.inventory:

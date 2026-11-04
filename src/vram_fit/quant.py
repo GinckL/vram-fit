@@ -28,6 +28,23 @@ class QuantContext:
     n_gqa: int = 1
     has_output: bool = True
     arch: str = ""
+    is_70b: bool = False                                     # llama.cpp LLM_TYPE_70B (80-layer GQA llama/qwen2)
+    attn_v_rank: Dict[int, int] = field(default_factory=dict)  # layer -> ordinal among attn_v-like tensors
+    n_attn_v: int = 0
+
+
+def make_quant_context(spec, inventory) -> QuantContext:
+    """Build the per-model state llama.cpp's quantizer tracks (attn_v counters, model type)."""
+    ranks: Dict[int, int] = {}
+    for t in inventory:
+        if t.kind in ("attn_v", "attn_qkv", "attn_kv_b") and t.layer is not None and t.layer not in ranks:
+            ranks[t.layer] = len(ranks)
+    heads, kv = spec.num_heads, max(spec.num_kv_heads or [spec.num_heads])
+    is_70b = (spec.num_layers == 80 and heads != kv and
+              spec.model_type in ("llama", "qwen2", "deci", "olmo", "LlamaForCausalLM", "Qwen2ForCausalLM"))
+    return QuantContext(n_layer=spec.num_layers, n_expert=spec.num_experts, n_gqa=spec.gqa_ratio,
+                        has_output=not spec.tie_embeddings, arch=spec.model_type, is_70b=is_70b,
+                        attn_v_rank=ranks, n_attn_v=len(ranks))
 
 
 @dataclass
@@ -123,100 +140,150 @@ def _use_more_bits(i: int, n: int) -> bool:
     return i < n // 8 or i >= 7 * n // 8 or (i - n // 8) % 3 == 2
 
 
+# Ported from llama.cpp src/llama-quant.cpp (llama_tensor_get_type_impl + fallback), current master.
+# Assumes an importance matrix for IQ* quants (they are always published with one).
+_IQ_LOW = {"IQ2_XXS", "IQ2_XS", "IQ1_S", "IQ2_S", "IQ2_M", "IQ1_M"}
+_OUT_Q5K = {"IQ2_XXS", "IQ2_XS", "IQ3_XXS", "IQ1_S", "IQ2_S", "IQ2_M", "IQ1_M"}
+_ATTN_V_LIKE = {"attn_v", "attn_qkv", "attn_kv_b"}
+_FFN_DOWN = {"ffn_down", "ffn_down_exps", "ffn_down_shexp"}
+_FFN_GATE_UP = {"ffn_gate", "ffn_up", "ffn_gate_exps", "ffn_up_exps", "ffn_gate_shexp", "ffn_up_shexp",
+                "ffn_gate_up", "ffn_gate_up_exps"}
+_MOE8_ATTN_O_Q5K = {"Q2_K", "IQ3_XS", "IQ3_XXS", "Q3_K_S", "Q3_K_M", "IQ4_NL", "Q4_K_S", "Q4_K_M", "IQ3_S",
+                    "IQ3_M", "IQ4_XS"}
 _GGUF_FALLBACK = {
-    "IQ2_XXS": "IQ4_NL", "IQ2_XS": "IQ4_NL", "IQ2_S": "IQ4_NL", "IQ3_XXS": "IQ4_NL",
-    "IQ3_S": "IQ4_NL", "IQ1_S": "IQ4_NL", "IQ1_M": "IQ4_NL", "Q2_K": "IQ4_NL",
-    "Q3_K": "IQ4_NL", "IQ4_XS": "IQ4_NL", "TQ1_0": "IQ4_NL", "TQ2_0": "IQ4_NL",
+    "IQ1_S": "IQ4_NL", "IQ1_M": "IQ4_NL", "IQ2_XXS": "IQ4_NL", "IQ2_XS": "IQ4_NL", "IQ2_S": "IQ4_NL",
+    "IQ3_XXS": "IQ4_NL", "IQ3_S": "IQ4_NL", "IQ4_XS": "IQ4_NL",
+    "Q2_K": "Q4_0", "Q3_K": "Q4_0", "TQ1_0": "Q4_0", "TQ2_0": "Q4_0",
     "Q4_K": "Q5_0", "Q5_K": "Q5_1", "Q6_K": "Q8_0",
 }
-_IQ_LOW = {"IQ2_XXS", "IQ2_XS", "IQ2_S", "IQ2_M", "IQ1_S", "IQ1_M"}
-_IQ3 = {"IQ3_XXS", "IQ3_XS", "IQ3_S", "IQ3_M"}
 
 
 def _gguf_tensor_type(ftype: str, base: str, t: Tensor, qc: QuantContext) -> str:
-    if t.is_1d or t.kind in ("norm", "bias"):
+    # tensor_allows_quantization: 1-D tensors, norms, biases and MoE routers keep their source type (f32)
+    if t.is_1d or t.kind in ("norm", "bias", "router", "ssm_other"):
         return "F32"
     if ftype in ("F32", "F16", "BF16"):
         return ftype
-    if t.kind == "router":
-        return "F32" if t.numel < 1_000_000 else base
     n = max(qc.n_layer, 1)
     i = t.layer if t.layer is not None else 0
+    ne = qc.n_expert
     new = base
-    is_output = t.kind == "head" or (t.kind == "embed" and not qc.has_output)
-    if ftype == "MXFP4_MOE":
-        if t.is_expert:
-            return "MXFP4"
-        new = "Q8_0"
-        is_output = False
-    if is_output:
-        if ftype == "Q8_0":
+    k = t.kind
+    if k == "head" or (k == "embed" and not qc.has_output):
+        if ftype == "MXFP4_MOE":
             new = "Q8_0"
-        elif ftype in _IQ_LOW:
+        elif qc.arch == "falcon" or t.n_in % ggml_type(base).block_size != 0:
+            new = "Q8_0"
+        elif ftype in _OUT_Q5K:
             new = "Q5_K"
-        elif ftype in ("Q4_0", "Q4_1", "Q5_0", "Q5_1"):
+        elif new != "Q8_0":
             new = "Q6_K"
-        else:
-            new = "Q6_K"
-        if t.n_in % 256 != 0:
-            new = "Q8_0"
-    elif t.kind == "embed":
-        if ftype in _IQ_LOW:
+    elif ftype == "MXFP4_MOE":
+        new = "MXFP4" if t.experts > 1 else "Q8_0"
+    elif k == "embed":
+        if ftype in ("IQ2_XXS", "IQ2_XS", "IQ1_S", "IQ1_M"):
             new = "Q2_K"
-        elif ftype in _IQ3:
+        elif ftype in ("IQ2_S", "IQ2_M", "IQ3_XXS"):
             new = "IQ3_S"
         elif ftype in ("TQ1_0", "TQ2_0"):
             new = "Q4_K"
-    elif t.kind in ("attn_v", "attn_qkv", "attn_kv_b", "attn_v_b"):
-        if ftype in ("Q2_K", "Q2_K_S"):
+    elif ftype in _IQ_LOW:
+        if k in _ATTN_V_LIKE:
+            if qc.n_gqa >= 4 or ne >= 4:
+                new = "Q4_K"
+            else:
+                new = "IQ3_S" if ftype in ("IQ2_S", "IQ2_M") else "Q2_K"
+        elif k == "attn_k" and ne == 8:
+            new = "Q4_K"
+        elif k in _FFN_DOWN:
+            if i < n // 8:
+                new = "IQ3_S" if ftype in ("IQ2_S", "IQ2_M") else "Q2_K"
+        elif k == "attn_o":
+            if ne == 8:
+                new = "Q5_K"
+            elif ftype in ("IQ1_S", "IQ1_M"):
+                new = "IQ2_XXS"
+            elif ftype in ("IQ2_S", "IQ2_M"):
+                new = "IQ3_S"
+    elif k in _ATTN_V_LIKE:
+        iv = qc.attn_v_rank.get(i, i)
+        nv = qc.n_attn_v or n
+        if ftype == "Q2_K":
             new = "Q4_K" if qc.n_gqa >= 4 else "Q3_K"
-        elif ftype in _IQ_LOW:
-            new = "Q4_K" if qc.n_gqa >= 4 else base
-        elif ftype in _IQ3:
-            new = "Q4_K" if qc.n_gqa >= 4 else "IQ3_S"
+        elif ftype == "Q2_K_S" and qc.n_gqa >= 4:
+            new = "Q4_K"
+        elif ftype == "IQ3_XXS":
+            new = "Q4_K" if qc.n_gqa >= 4 else "IQ3_XXS"
+        elif ftype in ("IQ3_XS", "IQ3_S") and qc.n_gqa >= 4:
+            new = "Q4_K"
+        elif ftype == "IQ3_M":
+            new = "Q4_K"
         elif ftype == "Q3_K_M":
-            new = "Q5_K" if i < 2 else "Q4_K"
+            new = "Q5_K" if iv < 2 else "Q4_K"
         elif ftype == "Q3_K_L":
             new = "Q5_K"
-        elif ftype in ("Q4_K_M", "Q5_K_M") and _use_more_bits(i, n):
-            new = "Q6_K"
-        elif ftype == "Q4_K_S" and i < 4:
+        elif ftype in ("IQ4_NL", "IQ4_XS") and qc.n_gqa >= 4:
             new = "Q5_K"
-        elif ftype == "IQ4_XS" and qc.n_gqa >= 4:
-            new = "Q5_K" if qc.n_expert >= 4 else base
-        if qc.n_expert >= 8 and new not in ("Q8_0",):
+        elif ftype in ("Q4_K_M", "Q5_K_M") and _use_more_bits(iv, nv):
+            new = "Q6_K"
+        elif ftype == "Q4_K_S" and iv < 4:
+            new = "Q5_K"
+        if qc.is_70b and new in ("Q3_K", "Q4_K"):
+            new = "Q5_K"
+        if ne == 8:
             new = "Q8_0"
-    elif t.kind in ("attn_k", "attn_kv_a", "attn_k_b"):
-        if qc.n_expert >= 8:
+    elif k == "attn_k":
+        if ne == 8:
             new = "Q8_0"
-        elif ftype in ("IQ3_XS", "IQ3_XXS"):
+        elif ftype == "IQ3_XS":
             new = "IQ3_XXS"
-    elif t.kind in ("ffn_down", "ffn_down_exps", "ffn_down_shexp"):
+        elif ftype == "IQ3_XXS":
+            new = "IQ2_S"
+    elif k == "attn_q":
+        if ftype == "IQ3_XS":
+            new = "IQ3_XXS"
+        elif ftype == "IQ3_XXS":
+            new = "IQ2_S"
+    elif k in _FFN_DOWN:
+        falcon = qc.arch == "falcon"
         if ftype == "Q2_K":
             new = "Q3_K"
         elif ftype == "Q2_K_S":
-            new = "Q4_K" if i < n // 8 else base
+            if i < n // 8:
+                new = "Q4_K"
         elif ftype == "Q3_K_M":
-            new = "Q5_K" if i < n // 16 else ("Q4_K" if _use_more_bits(i, n) else "Q3_K")
-        elif ftype == "Q3_K_L":
-            new = "Q5_K"
-        elif ftype in ("Q4_K_M", "Q5_K_M"):
-            new = "Q6_K" if _use_more_bits(i, n) else base
-        elif ftype == "Q4_K_S":
-            new = "Q5_K" if i < n // 8 else base
-        elif ftype in ("IQ3_M", "IQ3_S") and i < n // 8:
-            new = "Q4_K"
-        elif ftype in ("IQ2_S", "IQ2_M") and i < n // 8:
-            new = "IQ3_S"
-    elif t.kind == "attn_o":
-        if ftype == "Q2_K":
-            new = "Q3_K"
-        elif ftype == "Q3_K_M":
+            new = "Q5_K" if i < n // 16 else ("Q4_K" if (not falcon or _use_more_bits(i, n)) else "Q3_K")
+        elif ftype == "IQ3_M" and (i < n // 8 or (ne == 8 and _use_more_bits(i, n))):
             new = "Q4_K"
         elif ftype == "Q3_K_L":
+            new = "Q4_K" if falcon else "Q5_K"
+        elif ftype == "Q4_K_M":
+            if falcon:
+                new = "Q6_K" if i < n // 16 else ("Q5_K" if _use_more_bits(i, n) else "Q4_K")
+            elif _use_more_bits(i, n):
+                new = "Q6_K"
+        elif ftype == "Q5_K_M" and _use_more_bits(i, n):
+            new = "Q6_K"
+        elif ftype == "Q4_K_S" and not falcon and i < n // 8:
             new = "Q5_K"
-        elif qc.n_expert >= 8 and ftype not in _IQ_LOW and ftype not in ("Q8_0",):
-            new = "Q5_K" if base in ("Q2_K", "Q3_K", "Q4_K", "IQ4_XS", "IQ4_NL") else base
+    elif k == "attn_o":
+        if qc.arch != "falcon":
+            if ne == 8:
+                if ftype in _MOE8_ATTN_O_Q5K:
+                    new = "Q5_K"
+            elif ftype == "Q2_K":
+                new = "Q3_K"
+            elif ftype == "IQ3_XXS":
+                new = "IQ3_S"
+            elif ftype in ("Q3_K_M", "IQ3_M"):
+                new = "Q4_K"
+            elif ftype == "Q3_K_L":
+                new = "Q5_K"
+        elif ftype == "Q3_K_L":
+            new = "Q4_K"
+    elif k in _FFN_GATE_UP:
+        if ftype == "IQ3_XS" and n // 8 <= i < 7 * n // 8:
+            new = "IQ3_XXS"
 
     blk = ggml_type(new).block_size
     if t.n_in % blk != 0:
@@ -266,7 +333,7 @@ _SCHEMES: List[QuantScheme] = [
     _g("Q2_K", "Q2_K", 2.96, "2-bit k-quant mix; large quality loss."),
     _g("Q2_K_S", "Q2_K", 2.7, "2-bit k-quant, smaller mix."),
     _g("IQ2_M", "IQ2_S", 2.7, "2.7-bit i-quant (needs imatrix)."),
-    _g("IQ2_S", "IQ2_S", 2.5, "2.5-bit i-quant (needs imatrix)."),
+    _g("IQ2_S", "IQ2_XS", 2.5, "2.5-bit i-quant (needs imatrix)."),
     _g("IQ2_XS", "IQ2_XS", 2.31, "2.31-bit i-quant (needs imatrix)."),
     _g("IQ2_XXS", "IQ2_XXS", 2.06, "2.06-bit i-quant (needs imatrix)."),
     _g("IQ1_M", "IQ1_M", 1.75, "1.75-bit i-quant; only for huge MoE models."),

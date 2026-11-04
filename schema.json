@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://github.com/GinckL/vram-fit/blob/main/schema.json",
+  "$id": "https://github.com/GinckL/vram-fit/blob/HEAD/schema.json",
   "title": "vram-fit JSON output",
   "description": "Schema of the document printed by `vram-fit <command> --json`. Every command prints exactly one object: either {vram_fit, command, result} or {vram_fit, command, error}. The `estimate` result (also `fit.result.best`, POST /api/estimate and the WebSocket `estimate` event data) is fully specified under $defs.Estimate.",
   "type": "object",

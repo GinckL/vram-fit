@@ -7,6 +7,8 @@
 """
 
 __version__ = "0.1.0"
+__author__ = "Azimxon Vaxobov (Ginckl)"
+__url__ = "https://github.com/GinckL/vram-fit"
 
 from .commands import build_command  # noqa: E402
 from .estimator import Settings, estimate  # noqa: E402

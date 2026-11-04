@@ -172,3 +172,40 @@ def test_cp1252_stdout_does_not_crash(monkeypatch):
     assert main(["matrix", "llama3.1-8b", "--gpu", "rtx-4090", "--contexts", "4k"]) == 0
     stream.flush()
     assert "●".encode("utf-8") in raw.getvalue()
+
+
+def test_server_rejects_bad_input_and_local_paths(tmp_path):
+    pytest.importorskip("fastapi")
+    from fastapi.testclient import TestClient
+    from vram_fit import server
+
+    c = TestClient(server.create_app())
+    r = c.post("/api/estimate", json={"model": "llama3.1-8b", "gpu": "rtx-4090", "settings": {"ctx": "huge"}})
+    assert r.status_code == 400 and "context" in r.json()["detail"]
+    r = c.post("/api/estimate", json={"model": 12345, "gpu": "rtx-4090"})
+    assert r.status_code == 400
+    cfg = tmp_path / "config.json"
+    cfg.write_text(json.dumps(CATALOG["mistralai/Mistral-7B-v0.3"]))
+    server.STATE.allow_local = False
+    try:
+        r = c.post("/api/estimate", json={"model": str(cfg), "gpu": "rtx-4090"})
+        assert r.status_code == 400 and "local file paths are disabled" in r.json()["detail"]
+    finally:
+        server.STATE.allow_local = True
+    assert c.post("/api/estimate", json={"model": str(cfg), "gpu": "rtx-4090"}).status_code == 200
+    with c.websocket_connect("/ws") as ws:
+        ws.send_text(json.dumps({"op": "estimate", "rid": 1, "model": "llama3.1-8b", "settings": {"batch": -3}}))
+        assert json.loads(ws.receive_text())["event"] == "error"
+        ws.send_text(json.dumps({"op": "estimate", "rid": 2, "model": "llama3.1-8b", "gpu": "rtx-4090"}))
+        assert json.loads(ws.receive_text())["rid"] == 2  # connection survives bad requests
+
+
+def test_trusted_hosts_block_dns_rebinding():
+    pytest.importorskip("fastapi")
+    from fastapi.testclient import TestClient
+    from vram_fit.server import create_app
+
+    c = TestClient(create_app(trusted_hosts=["127.0.0.1", "localhost"]), base_url="http://evil.example")
+    assert c.get("/api/health").status_code == 400
+    ok = TestClient(create_app(trusted_hosts=["127.0.0.1", "localhost"]), base_url="http://localhost")
+    assert ok.get("/api/health").status_code == 200
