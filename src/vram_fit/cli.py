@@ -22,7 +22,7 @@ from .hub import HubError, load_model
 from .optimizer import PREFERENCES, optimize
 from .presets import list_presets, parse_gpu_spec
 from .quant import QUANTS, quants_for_engine
-from .render import Style, render_estimate, render_table, status_cell
+from .render import Style, ensure_unicode_output, render_estimate, render_table, status_cell
 
 EXIT_OK, EXIT_ERROR, EXIT_NO_FIT = 0, 2, 3
 
@@ -396,6 +396,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: Optional[List[str]] = None) -> int:
+    ensure_unicode_output()
     parser = build_parser()
     a = parser.parse_args(argv)
     if not getattr(a, "func", None):

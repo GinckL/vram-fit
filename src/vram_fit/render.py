@@ -27,10 +27,43 @@ _ANSI = re.compile(r"\x1b\[[0-9;]*m")
 DIM = (120, 125, 135)
 
 
+def _enable_windows_vt() -> bool:
+    """Turn on ANSI escape processing in a Windows console (conhost). False if unavailable."""
+    if sys.platform != "win32":
+        return True
+    try:
+        import ctypes
+        kernel32 = ctypes.windll.kernel32  # type: ignore[attr-defined]
+        handle = kernel32.GetStdHandle(-11)  # STD_OUTPUT_HANDLE
+        mode = ctypes.c_uint32()
+        if not kernel32.GetConsoleMode(handle, ctypes.byref(mode)):
+            return False
+        return bool(kernel32.SetConsoleMode(handle, mode.value | 0x0004))  # ENABLE_VIRTUAL_TERMINAL_PROCESSING
+    except (AttributeError, OSError):
+        return False
+
+
+def ensure_unicode_output() -> None:
+    """Make stdout/stderr able to print the bar glyphs (Windows pipes/files default to cp1252)."""
+    for stream in (sys.stdout, sys.stderr):
+        enc = getattr(stream, "encoding", None) or "ascii"
+        try:
+            "█▓■●◐◑○✕┃·─".encode(enc)
+        except (UnicodeEncodeError, LookupError):
+            reconfigure = getattr(stream, "reconfigure", None)
+            if reconfigure is not None:
+                try:
+                    reconfigure(encoding="utf-8", errors="replace")
+                except (ValueError, OSError):
+                    pass
+
+
 class Style:
     def __init__(self, enabled: Optional[bool] = None):
         if enabled is None:
             enabled = sys.stdout.isatty() and not os.environ.get("NO_COLOR") and os.environ.get("TERM") != "dumb"
+            if enabled:
+                enabled = _enable_windows_vt()
         self.on = enabled
 
     def fg(self, rgb, s: str) -> str:

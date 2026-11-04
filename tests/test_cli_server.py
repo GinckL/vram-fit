@@ -160,3 +160,15 @@ def test_json_matches_published_schema(capsys, argv):
     main(argv + ["--json"])
     doc = json.loads(capsys.readouterr().out)
     jsonschema.validate(doc, schema)
+
+
+def test_cp1252_stdout_does_not_crash(monkeypatch):
+    # Windows: output redirected to a pipe/file uses the ANSI code page, which has no bar glyphs
+    import io
+    import sys
+    raw = io.BytesIO()
+    stream = io.TextIOWrapper(raw, encoding="cp1252")
+    monkeypatch.setattr(sys, "stdout", stream)
+    assert main(["matrix", "llama3.1-8b", "--gpu", "rtx-4090", "--contexts", "4k"]) == 0
+    stream.flush()
+    assert "●".encode("utf-8") in raw.getvalue()

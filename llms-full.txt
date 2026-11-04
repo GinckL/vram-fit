@@ -52,16 +52,28 @@ Five memory segments are always reported: **Model Weights**, **KV Cache**, **Act
 
 ## Install
 
+> **Not on PyPI yet** — until the first release, `pip install vram-fit` fails with "No matching distribution found". Install from GitHub or from a clone:
+
 ```bash
-pip install vram-fit                 # CLI + Python API, no dependencies
-pip install "vram-fit[server]"       # + FastAPI/uvicorn for the HTTP/WebSocket API (dashboard backend)
+pip install "vram-fit @ git+https://github.com/GinckL/vram-fit"              # CLI + Python API, no dependencies
+pip install "vram-fit[server] @ git+https://github.com/GinckL/vram-fit"      # + FastAPI/uvicorn for the HTTP/WebSocket API
 ```
 
-From source:
+From a clone (editable, with tests):
 
 ```bash
 git clone https://github.com/GinckL/vram-fit && cd vram-fit && pip install -e ".[dev]" && pytest
 ```
+
+**Windows: `'vram-fit' is not recognized`** — pip installed the script into your user `Scripts` folder, which is not on `PATH` ("Defaulting to user installation…"). Either run it through Python, which always works:
+
+```bash
+python -m vram_fit fit bartowski/Qwen2.5-14B-Instruct-GGUF --gpu auto -c 16k
+```
+
+or add the folder pip printed in its "is not on PATH" warning (typically `%APPDATA%\Python\Python3XX\Scripts`) to your user `PATH` and open a new terminal.
+
+After the PyPI release (see [REPO_SEO_SETUP.md](REPO_SEO_SETUP.md)) this becomes `pip install vram-fit`.
 
 Gated repos (Llama, Gemma) need `HF_TOKEN` (or `huggingface-cli login`); without it vram-fit falls back to its built-in architecture catalog. `HF_ENDPOINT` selects a mirror; `--offline` never touches the network.
 
