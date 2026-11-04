@@ -1,0 +1,87 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "vram-fit"
+version = "0.1.0"
+description = "Exact VRAM calculator and launch-command tuner for local LLMs: KV cache, context length, GQA, quantization (GGUF Q4_K_M, EXL2, AWQ, GPTQ, FP8) and LoRA/QLoRA fine-tuning memory, computed from config.json / GGUF headers without downloading weights."
+readme = "README.md"
+requires-python = ">=3.9"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "GinckL" }]
+keywords = [
+  "vram-calculator",
+  "gpu-memory-calculator",
+  "llm-vram-estimator",
+  "cuda-out-of-memory",
+  "kv-cache-calculator",
+  "context-length-memory",
+  "will-it-run",
+  "can-i-run-llm",
+  "gguf",
+  "llama-cpp",
+  "ollama",
+  "vllm",
+  "exllamav2",
+  "unsloth",
+  "lora",
+  "qlora",
+  "fine-tuning-memory",
+  "quantization",
+  "q4_k_m",
+  "awq",
+  "gptq",
+  "fp8",
+  "gqa",
+  "flash-attention",
+  "huggingface",
+  "local-llm",
+  "tokens-per-second",
+  "gpu-offload",
+  "apple-silicon",
+  "rocm",
+]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Environment :: Console",
+  "Environment :: GPU :: NVIDIA CUDA",
+  "Intended Audience :: Developers",
+  "Intended Audience :: Science/Research",
+  "Operating System :: OS Independent",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3 :: Only",
+  "Programming Language :: Python :: 3.9",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Topic :: Scientific/Engineering :: Artificial Intelligence",
+  "Topic :: System :: Hardware",
+  "Topic :: Utilities",
+]
+dependencies = []
+
+[project.optional-dependencies]
+server = ["fastapi>=0.110", "uvicorn[standard]>=0.29"]
+all = ["fastapi>=0.110", "uvicorn[standard]>=0.29", "psutil>=5.9"]
+dev = ["pytest>=7", "httpx>=0.27", "fastapi>=0.110", "uvicorn>=0.29", "pyflakes>=3", "jsonschema>=4"]
+
+[project.scripts]
+vram-fit = "vram_fit.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/GinckL/vram-fit"
+Documentation = "https://github.com/GinckL/vram-fit#readme"
+"LLM Docs" = "https://github.com/GinckL/vram-fit/blob/main/llms-full.txt"
+Issues = "https://github.com/GinckL/vram-fit/issues"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+vram_fit = ["web/dist/**/*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

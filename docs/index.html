@@ -1,0 +1,209 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>vram-fit — exact VRAM calculator for local LLMs, KV cache and LoRA/QLoRA fine-tuning</title>
+<meta name="description" content="vram-fit computes exact GPU memory (weights, KV cache, activations, CUDA overhead, LoRA/QLoRA optimizer states) and tokens/s for any Hugging Face or GGUF model on your GPU — without downloading weights — and prints a llama.cpp, Ollama, vLLM, ExLlamaV2 or Unsloth command that avoids CUDA out of memory.">
+<meta name="keywords" content="VRAM calculator, GPU memory calculator, LLM VRAM, KV cache size, CUDA out of memory, llama.cpp, Ollama, vLLM, GGUF, Q4_K_M, LoRA, QLoRA, Unsloth, context length, tokens per second">
+<link rel="canonical" href="https://ginckl.github.io/vram-fit/">
+<meta property="og:title" content="vram-fit — exact VRAM for local LLMs before you download them">
+<meta property="og:description" content="Weights, KV cache, activations, overhead and LoRA states, megabyte by megabyte, from config.json / GGUF headers. Probes your GPU, predicts tok/s, prints the launch command.">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://ginckl.github.io/vram-fit/">
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@graph": [
+    {
+      "@type": "SoftwareSourceCode",
+      "@id": "https://github.com/GinckL/vram-fit#code",
+      "name": "vram-fit",
+      "description": "Python CLI, library and HTTP/WebSocket API that computes exact VRAM (model weights, KV cache, activation buffers, CUDA/driver overhead, LoRA/QLoRA optimizer states) and tokens per second for local LLM inference and fine-tuning from config.json or GGUF headers, without downloading weights.",
+      "codeRepository": "https://github.com/GinckL/vram-fit",
+      "programmingLanguage": {"@type": "ComputerLanguage", "name": "Python", "url": "https://www.python.org/"},
+      "runtimePlatform": "Python >= 3.9 (CPython); Linux, macOS, Windows",
+      "license": "https://opensource.org/licenses/MIT",
+      "version": "0.1.0",
+      "dateCreated": "2026-11-04",
+      "keywords": "VRAM calculator, GPU memory, KV cache, context length, CUDA out of memory, llama.cpp, Ollama, vLLM, ExLlamaV2, Unsloth, GGUF, Q4_K_M, AWQ, GPTQ, FP8, NF4, LoRA, QLoRA, fine-tuning, tokens per second, Apple Silicon, ROCm",
+      "targetProduct": {"@id": "https://github.com/GinckL/vram-fit#app"},
+      "author": {"@type": "Person", "alternateName": "GinckL", "url": "https://github.com/GinckL"}
+    },
+    {
+      "@type": "SoftwareApplication",
+      "@id": "https://github.com/GinckL/vram-fit#app",
+      "name": "vram-fit",
+      "applicationCategory": "DeveloperApplication",
+      "applicationSubCategory": "LLM GPU memory and performance estimator",
+      "operatingSystem": "Linux, macOS, Windows",
+      "softwareVersion": "0.1.0",
+      "installUrl": "https://pypi.org/project/vram-fit/",
+      "downloadUrl": "https://github.com/GinckL/vram-fit",
+      "softwareRequirements": "Python 3.9+; optional: fastapi, uvicorn for the API server",
+      "featureList": [
+        "vram-fit estimate MODEL --gpu auto -q Q4_K_M -c 32k --kv 8 --json",
+        "vram-fit fit MODEL --gpu auto -c 32k (auto-tune quant, KV cache, -ngl, --n-cpu-moe and print the launch command)",
+        "vram-fit matrix MODEL --contexts 4k,32k,128k (quantization x context fit table)",
+        "vram-fit fit MODEL --mode qlora --engine unsloth (LoRA/QLoRA/full fine-tuning memory, batch size and train.py)",
+        "vram-fit hw (probe NVIDIA via NVML, AMD via ROCm, Apple Silicon unified memory, RAM, PCIe)",
+        "vram-fit serve (REST + WebSocket API with live GPU telemetry)",
+        "Reads only config.json, GGUF and safetensors headers via HTTP Range requests",
+        "KV cache for GQA, MQA, MLA, sliding-window and hybrid linear-attention layers with q8_0/q4_0/fp8 quantization",
+        "llama.cpp k-quant mixing rules for byte-exact GGUF size prediction",
+        "Tokens-per-second prediction from memory bandwidth, PCIe and TFLOPS",
+        "--json output on every command with a published JSON Schema"
+      ],
+      "offers": {"@type": "Offer", "price": "0", "priceCurrency": "USD"},
+      "isAccessibleForFree": true
+    },
+    {
+      "@type": "FAQPage",
+      "mainEntity": [
+        {"@type": "Question", "name": "How do I calculate exact VRAM for LoRA or QLoRA fine-tuning before downloading a model?",
+         "acceptedAnswer": {"@type": "Answer", "text": "Run vram-fit fit <hf-repo> --mode qlora --engine unsloth -c 4096 --gpu auto. It reads only config.json and reports base weights, LoRA adapters, gradients, optimizer states and activations, picks the largest micro-batch that fits and writes train.py."}},
+        {"@type": "Question", "name": "How do I fix CUDA out of memory in llama.cpp or Ollama when increasing the context length?",
+         "acceptedAnswer": {"@type": "Answer", "text": "Run vram-fit fit <model> -c 32k --gpu auto. It sizes the KV cache, picks -ngl, KV-cache quantization (-ctk/-ctv q8_0 with -fa on) and the quant that fit, and prints the llama-server command or Ollama Modelfile."}},
+        {"@type": "Question", "name": "How much memory does the KV cache use?",
+         "acceptedAnswer": {"@type": "Answer", "text": "Per token it is the sum over layers of kv_heads x (head_dim_k x bytes_k + head_dim_v x bytes_v); Llama-3-8B uses 128 KiB per token in f16, i.e. 1024 MiB at 8192 tokens. vram-fit inspect <model> prints it for any model, including MLA and sliding-window architectures."}},
+        {"@type": "Question", "name": "Which GGUF quant should I download for my GPU?",
+         "acceptedAnswer": {"@type": "Answer", "text": "Run vram-fit matrix <gguf-repo> --gpu <your-gpu> to see every quant x context combination as fits, tight, offload, spill or oom with predicted tokens per second."}}
+      ]
+    }
+  ]
+}
+</script>
+<style>
+:root {
+  --bg: #07080b; --panel: #0e1016; --panel-2: #141722; --line: #222634; --text: #e8eaf0; --muted: #8b90a0;
+  --violet: #7c5cff; --cyan: #00d1ff; --amber: #ffb020; --gray: #8a8f98; --pink: #ff4fd8; --green: #30d158; --red: #ff3b30;
+  --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+  --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Roboto, Helvetica, Arial, sans-serif;
+}
+:root[data-theme="light"] { --bg: #f6f7fa; --panel: #ffffff; --panel-2: #f0f2f7; --line: #dfe3ec; --text: #12141a; --muted: #5d6374; }
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text); font: 16px/1.6 var(--sans); }
+a { color: var(--cyan); text-decoration: none; } a:hover { text-decoration: underline; }
+.wrap { max-width: 1040px; margin: 0 auto; padding: 0 16px; }
+header { padding: 64px 0 32px; }
+.eyebrow { font: 600 12px/1 var(--mono); letter-spacing: .14em; text-transform: uppercase; color: var(--green); }
+h1 { font-size: clamp(32px, 6vw, 56px); line-height: 1.05; margin: 14px 0 16px; letter-spacing: -0.02em; }
+h1 span { background: linear-gradient(90deg, var(--violet), var(--cyan)); -webkit-background-clip: text; background-clip: text; color: transparent; }
+.lede { font-size: 19px; color: var(--muted); max-width: 760px; }
+.install { display: flex; flex-wrap: wrap; gap: 12px; margin: 28px 0 8px; }
+.cmd { font: 15px var(--mono); background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 12px 16px; overflow-x: auto; white-space: nowrap; max-width: 100%; }
+.cmd b { color: var(--green); font-weight: 500; }
+.gauge { margin: 40px 0 8px; background: var(--panel); border: 1px solid var(--line); border-radius: 18px; padding: 20px; }
+.bar { position: relative; height: 34px; border-radius: 10px; background: var(--panel-2); display: flex; overflow: hidden; }
+.bar i { display: block; height: 100%; }
+.ceiling { position: absolute; top: -6px; bottom: -6px; width: 2px; background: var(--red); box-shadow: 0 0 12px var(--red); }
+.legend { display: flex; flex-wrap: wrap; gap: 8px 18px; margin-top: 14px; font: 13px var(--mono); color: var(--muted); }
+.legend span::before { content: ""; display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 6px; background: var(--c); vertical-align: -1px; }
+section { padding: 36px 0; border-top: 1px solid var(--line); }
+h2 { font-size: 26px; margin: 0 0 18px; letter-spacing: -0.01em; }
+h3 { font-size: 17px; margin: 22px 0 6px; }
+p { margin: 0 0 12px; }
+pre { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 16px; overflow-x: auto; font: 13px/1.5 var(--mono); }
+.grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 14px; }
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 16px; }
+.card b { display: block; margin-bottom: 4px; }
+.card p { color: var(--muted); font-size: 14px; margin: 0; }
+table { width: 100%; border-collapse: collapse; font-size: 14px; }
+th, td { text-align: left; padding: 9px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+th { color: var(--muted); font-weight: 600; }
+.tablewrap { overflow-x: auto; }
+footer { padding: 32px 0 64px; color: var(--muted); font-size: 14px; border-top: 1px solid var(--line); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div class="eyebrow">open source · MIT · python ≥ 3.9 · zero dependencies</div>
+    <h1>Know your <span>VRAM</span> before you download a single gigabyte.</h1>
+    <p class="lede">vram-fit computes the exact GPU memory a local LLM needs — model weights, KV cache, activation buffers, CUDA/driver overhead and LoRA/QLoRA optimizer states — from <code>config.json</code> or the GGUF header alone. It probes your NVIDIA, AMD or Apple Silicon GPU, predicts tokens/s from memory bandwidth, and prints a llama.cpp, Ollama, vLLM, ExLlamaV2 or Unsloth command that will not hit <code>CUDA out of memory</code>.</p>
+    <div class="install">
+      <div class="cmd"><b>$</b> pip install vram-fit</div>
+      <div class="cmd"><b>$</b> vram-fit fit Qwen/Qwen2.5-14B-Instruct --gpu auto -c 32k</div>
+    </div>
+    <div class="gauge" aria-label="Example VRAM allocation: Qwen2.5-14B Q4_K_M, 16k context, q8_0 KV cache on a 12 GiB RTX 4070">
+      <div class="bar">
+        <i style="width:64.8%;background:var(--violet)"></i>
+        <i style="width:13.0%;background:var(--cyan)"></i>
+        <i style="width:3.3%;background:var(--amber)"></i>
+        <i style="width:2.4%;background:var(--gray)"></i>
+        <div class="ceiling" style="left:97.6%"></div>
+      </div>
+      <div class="legend">
+        <span style="--c:var(--violet)">Model Weights 8,148 MiB</span>
+        <span style="--c:var(--cyan)">KV Cache 1,632 MiB</span>
+        <span style="--c:var(--amber)">Activation Buffers 417 MiB</span>
+        <span style="--c:var(--gray)">CUDA/Driver 300 MiB</span>
+        <span style="--c:var(--red)">VRAM ceiling 12 GiB · RTX 4070 · 35.6 tok/s</span>
+      </div>
+    </div>
+  </header>
+
+  <section>
+    <h2>What it measures</h2>
+    <div class="grid">
+      <div class="card"><b>Weights, tensor by tensor</b><p>llama.cpp k-quant mixing rules (Q6_K heads, use_more_bits layers), exact GGUF types from remote headers, AWQ/GPTQ scales, EXL2, FP8, NF4, MXFP4.</p></div>
+      <div class="card"><b>KV cache</b><p>GQA, MQA, DeepSeek MLA, Gemma/gpt-oss sliding windows, hybrid linear layers, q8_0 / q4_0 / fp8 / Q4 cache types.</p></div>
+      <div class="card"><b>Activations & overhead</b><p>llama.cpp compute buffers with and without flash attention, vLLM profiling peak and CUDA graphs, CUDA/ROCm/Metal context.</p></div>
+      <div class="card"><b>Fine-tuning</b><p>LoRA/QLoRA/full: adapters, grads, AdamW / 8-bit / paged / Adafactor states, gradient checkpointing incl. Unsloth offload.</p></div>
+      <div class="card"><b>Placement & speed</b><p>-ngl layer split, --n-cpu-moe expert offload, PCIe spill, decode/prefill tok/s from bandwidth and TFLOPS.</p></div>
+      <div class="card"><b>Machine-readable</b><p><code>--json</code> on every command, a JSON Schema, a Python API and a REST + WebSocket server.</p></div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Real output</h2>
+<pre>$ vram-fit fit bartowski/Qwen2.5-14B-Instruct-GGUF --gpu rtx-4070 -c 16k
+Qwen/Qwen2.5-14B  Qwen2ForCausalLM · 14.77B · 48 layers · GQA 40:8 · ctx 32,768
+RTX 4070 12GB · 12.0 GiB · 504 GB/s · PCIe Gen4 x16 · simulated
+llama.cpp · inference · Q4_K_M · ctx 16,384 · batch 1 · KV q8_0 · ngl 49/49
+
+  ■ Model Weights                 8,148.4 MiB   77.6%
+  ■ KV Cache                      1,632.0 MiB   15.5%
+  ■ Activation Buffers              417.0 MiB    4.0%
+  ■ CUDA/Driver Overhead            300.0 MiB    2.9%
+    GPU total                    10,497.4 MiB  of 12,288 MiB (85.4%)
+
+[FITS]  35.6 tok/s decode · 29.9 tok/s at full ctx · prefill 1,551 tok/s
+  max context fully on GPU: 33,280 · max batch: 2
+
+Launch (llama.cpp):
+  llama-server -hf bartowski/Qwen2.5-14B-Instruct-GGUF:Q4_K_M -c 16384 -ngl 99 -fa on -ctk q8_0 -ctv q8_0 --host 127.0.0.1 --port 8080 --jinja</pre>
+  </section>
+
+  <section>
+    <h2>Common questions</h2>
+    <h3>How do I calculate exact VRAM for LoRA or QLoRA fine-tuning before downloading a model?</h3>
+    <p><code>vram-fit fit &lt;hf-repo&gt; --mode qlora --engine unsloth -c 4k --gpu auto</code> reports base weights, adapters, gradients, optimizer states and activations, picks the largest micro-batch that fits, and writes <code>train.py</code>.</p>
+    <h3>How do I fix CUDA out of memory in llama.cpp / Ollama at long context?</h3>
+    <p><code>vram-fit fit &lt;model&gt; -c 32k --gpu auto</code> chooses <code>-ngl</code>, KV-cache quantization and quant so everything fits, and prints the command or Modelfile.</p>
+    <h3>How big is the KV cache?</h3>
+    <p>Σ layers × kv_heads × (head_dim_k·bytes_k + head_dim_v·bytes_v) per token — Llama-3-8B: 128 KiB/token in f16, exactly 1024 MiB at 8k. <code>vram-fit inspect &lt;model&gt;</code> prints it for any architecture.</p>
+    <h3>Which GGUF quant should I download?</h3>
+    <p><code>vram-fit matrix &lt;gguf-repo&gt; --gpu &lt;your-gpu&gt;</code> shows every quant × context cell as fits / tight / offload / spill / oom with tok/s.</p>
+  </section>
+
+  <section>
+    <h2>Accuracy</h2>
+    <div class="tablewrap"><table>
+      <tr><th>Check</th><th>vram-fit</th><th>Reference</th><th>Error</th></tr>
+      <tr><td>Llama-3.1-8B Q4_K_M (config.json only)</td><td>4,912,898,048 B</td><td>4,920,739,232 B file</td><td>−0.16 %</td></tr>
+      <tr><td>Qwen2.5-32B Q4_K_M</td><td>19,845,357,568 B</td><td>19,851,336,256 B file</td><td>−0.03 %</td></tr>
+      <tr><td>Llama-3-8B KV cache @ 8192, f16</td><td>1024.00 MiB</td><td>llama.cpp log</td><td>0</td></tr>
+      <tr><td>LoRA r=16 trainable params, Llama-3-8B</td><td>41,943,040</td><td>PEFT</td><td>0</td></tr>
+    </table></div>
+  </section>
+
+  <section>
+    <h2>Docs</h2>
+    <p><a href="https://github.com/GinckL/vram-fit#readme">README</a> · <a href="https://github.com/GinckL/vram-fit/blob/main/AGENT_GUIDE.md">Agent guide (--json)</a> · <a href="https://github.com/GinckL/vram-fit/blob/main/schema.json">JSON schema</a> · <a href="https://raw.githubusercontent.com/GinckL/vram-fit/main/llms.txt">llms.txt</a> · <a href="https://raw.githubusercontent.com/GinckL/vram-fit/main/llms-full.txt">llms-full.txt</a> · <a href="https://github.com/GinckL/vram-fit/blob/main/CITATION.cff">Cite</a></p>
+  </section>
+
+  <footer>vram-fit is MIT-licensed. Memory figures are exact for GGUF headers and typically within ~1 % from config.json; tokens/s are bandwidth-model estimates (±20 %).</footer>
+</div>
+</body>
+</html>

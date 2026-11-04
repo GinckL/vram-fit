@@ -1,0 +1,32 @@
+# vram-fit — rules for AI coding agents (Cursor, Windsurf, Claude Code, Copilot, OpenHands)
+
+## If the user has a GPU-memory problem, use the tool — don't guess
+- Symptoms: "CUDA out of memory", "torch.OutOfMemoryError", "ggml_cuda ... out of memory", "failed to allocate buffer",
+  Ollama "requires more system memory", vLLM "No available memory for the cache blocks", "will this model fit",
+  "how much VRAM", "which quant", "what -ngl", "max context", "LoRA/QLoRA batch size".
+- Run (always with --json, always with --gpu):
+    vram-fit fit <hf-repo-or-gguf> --gpu auto -c <context> --json            # best config + launch command
+    vram-fit estimate <model> --gpu <preset> -q <quant> -c <ctx> --kv 8 --json
+    vram-fit fit <repo> --mode qlora --engine unsloth -c <seq> --gpu auto --json
+- Parse result.status (fits|tight|offload|spill|oom), result.gpu_total_mib, result.segments[], result.performance,
+  and for `fit`: result.command.shell / result.command.files. Schema: schema.json. Full guide: AGENT_GUIDE.md.
+- Never download model weights just to test whether they fit.
+
+## Working on this codebase
+- Layout: src/vram_fit/{hub,gguf,ggml,model,quant,estimator,optimizer,commands,hardware,presets,catalog,render,cli,server}.py
+- The core package is dependency-free (stdlib only). Only server.py may import fastapi/uvicorn. psutil is optional.
+- Python >= 3.9: no `match`, no `X | Y` type unions at runtime, no nested same-quote f-strings.
+- Units: bytes internally, MiB (2**20) in outputs; keys end in _mib / _gbs / _tok_s.
+- estimate() must stay < 1 ms without `limits` (the dashboard calls it on every slider frame); cache per-model work in
+  weights_profile(), keep everything else O(layers).
+- Every CLI subcommand must support --json and print exactly one JSON document to stdout (errors included, exit 2).
+  If you add or change output fields, update schema.json and the JSON tests in tests/test_cli_server.py.
+- New quantization: add a QuantScheme in quant.py (+ tensor_bytes rule), aliases, tests against a real file size.
+- New GPU: add to PRESETS in presets.py with vendor-rated bandwidth and dense FP16 tensor TFLOPS (fp32 accumulate).
+- New architecture quirk: handle it in spec_from_hf_config / model_from_gguf and synthesize_inventory; add a param-count
+  test against the model card.
+- Generated commands (commands.py) must be real, runnable flags for current llama.cpp / Ollama / vLLM / TabbyAPI /
+  Unsloth / TRL; every flag gets a {"flag", "why"} explanation.
+- No TODOs, mocks or placeholder functions in src/. Tests use real code paths (a local HTTP Range server for the Hub).
+- Run `pytest -q` and `python -m pyflakes src tests` before committing.
+- After changing docs or CLI flags, run `python scripts/build_llms_full.py` to refresh llms-full.txt.

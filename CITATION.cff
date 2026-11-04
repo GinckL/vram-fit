@@ -1,0 +1,38 @@
+cff-version: 1.2.0
+message: "If you use vram-fit in research or teaching, please cite it as below."
+type: software
+title: "vram-fit: Exact VRAM and Throughput Estimation for Local Large Language Model Inference and Parameter-Efficient Fine-Tuning"
+abstract: >-
+  vram-fit computes the GPU memory required to run or fine-tune a transformer language model
+  on given hardware, without downloading model weights. It reads only the model's config.json or
+  GGUF/safetensors headers, reconstructs a per-tensor inventory, applies the byte-exact layout of
+  quantization formats (llama.cpp k-quant mixing rules, AWQ, GPTQ, EXL2, FP8, NF4, MXFP4), and models
+  the KV cache (GQA, MQA, MLA, sliding-window and hybrid recurrent layers, KV quantization),
+  engine-specific activation buffers, driver overhead and LoRA/QLoRA/full fine-tuning optimizer state.
+  It probes NVIDIA (NVML), AMD (ROCm) and Apple Silicon hardware, predicts decode and prefill
+  throughput from memory bandwidth and compute, and searches for the fastest configuration that does
+  not exceed device memory, emitting launch commands for llama.cpp, Ollama, vLLM, ExLlamaV2 and Unsloth.
+authors:
+  - alias: "GinckL"
+repository-code: "https://github.com/GinckL/vram-fit"
+url: "https://github.com/GinckL/vram-fit"
+license: MIT
+version: "0.1.0"
+date-released: "2026-11-04"
+keywords:
+  - large language models
+  - GPU memory estimation
+  - VRAM calculator
+  - KV cache
+  - quantization
+  - GGUF
+  - llama.cpp
+  - vLLM
+  - LoRA
+  - QLoRA
+  - fine-tuning
+  - inference performance modeling
+  - memory bandwidth
+  - grouped-query attention
+  - multi-head latent attention
+  - mixture of experts

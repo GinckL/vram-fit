@@ -1,0 +1,183 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/GinckL/vram-fit/blob/main/schema.json",
+  "title": "vram-fit JSON output",
+  "description": "Schema of the document printed by `vram-fit <command> --json`. Every command prints exactly one object: either {vram_fit, command, result} or {vram_fit, command, error}. The `estimate` result (also `fit.result.best`, POST /api/estimate and the WebSocket `estimate` event data) is fully specified under $defs.Estimate.",
+  "type": "object",
+  "required": ["vram_fit", "command"],
+  "properties": {
+    "vram_fit": {"type": "string", "description": "vram-fit version"},
+    "command": {"type": ["string", "null"], "enum": ["estimate", "est", "fit", "optimize", "tune", "matrix", "inspect", "hw", "probe", "presets", "quants", "catalog", "serve", "version", null]},
+    "result": {},
+    "launch": {"$ref": "#/$defs/Command"},
+    "error": {
+      "type": "object",
+      "required": ["type", "message"],
+      "properties": {
+        "type": {"type": "string", "examples": ["HubError", "KeyError", "ValueError", "GGUFError"]},
+        "message": {"type": "string"}
+      }
+    }
+  },
+  "allOf": [
+    {"if": {"properties": {"command": {"enum": ["estimate", "est"]}}, "required": ["result"]},
+     "then": {"properties": {"result": {"$ref": "#/$defs/Estimate"}}}},
+    {"if": {"properties": {"command": {"enum": ["fit", "optimize", "tune"]}}, "required": ["result"]},
+     "then": {"properties": {"result": {"$ref": "#/$defs/Optimize"}}}},
+    {"if": {"properties": {"command": {"const": "matrix"}}, "required": ["result"]},
+     "then": {"properties": {"result": {"$ref": "#/$defs/Matrix"}}}}
+  ],
+  "$defs": {
+    "Status": {
+      "type": "string",
+      "enum": ["fits", "tight", "offload", "spill", "oom"],
+      "description": "fits: <92% of the VRAM budget. tight: 92-100%. offload: runs, but some layers/KV live in system RAM. spill: exceeds VRAM (OOM on Linux, PCIe shared-memory spill on Windows, wired-limit raise on macOS). oom: exceeds VRAM + RAM."
+    },
+    "Segment": {
+      "type": "object",
+      "required": ["key", "label", "mib"],
+      "properties": {
+        "key": {"enum": ["weights", "kv_cache", "activations", "overhead", "lora_optimizer"]},
+        "label": {"enum": ["Model Weights", "KV Cache", "Activation Buffers", "CUDA/Driver Overhead", "LoRA/Optimizer States"]},
+        "mib": {"type": "number", "minimum": 0, "description": "GPU-resident MiB (2^20 bytes), summed over all GPUs"}
+      }
+    },
+    "Estimate": {
+      "type": "object",
+      "required": ["status", "fits", "model", "hardware", "settings", "segments", "gpu_total_mib", "ceiling_mib",
+                   "budget_mib", "headroom_mib", "offload", "performance", "details", "layer_map", "warnings", "notes"],
+      "properties": {
+        "status": {"$ref": "#/$defs/Status"},
+        "fits": {"type": "boolean", "description": "true when status is fits, tight or offload (the model will run)"},
+        "model": {
+          "type": "object",
+          "required": ["id", "architecture", "params_total", "params_active", "layers"],
+          "properties": {
+            "id": {"type": "string"}, "repo": {"type": ["string", "null"]}, "file": {"type": ["string", "null"]},
+            "source": {"enum": ["hf-config", "gguf", "gguf-local", "safetensors", "catalog", "local-config"]},
+            "architecture": {"type": "string"}, "attention": {"type": "string", "examples": ["GQA 32:8", "MQA", "MLA", "MHA"]},
+            "params_total": {"type": "integer"}, "params_active": {"type": "integer"},
+            "layers": {"type": "integer"}, "hidden_size": {"type": "integer"}, "heads": {"type": "integer"},
+            "kv_heads": {"type": "integer"}, "head_dim": {"type": "integer"}, "vocab_size": {"type": "integer"},
+            "max_context": {"type": "integer"}, "experts": {"type": "integer"}, "experts_per_token": {"type": "integer"},
+            "sliding_window": {"type": ["integer", "null"]},
+            "layer_types": {"type": "object", "additionalProperties": {"type": "integer"}},
+            "native_quant": {"type": ["string", "null"]}
+          }
+        },
+        "hardware": {
+          "type": "object",
+          "required": ["name", "vendor", "count", "vram_mib", "ceiling_mib", "budget_mib"],
+          "properties": {
+            "name": {"type": "string"}, "vendor": {"enum": ["nvidia", "amd", "apple", "intel", "cpu"]},
+            "count": {"type": "integer", "minimum": 1}, "vram_mib": {"type": "number"},
+            "ceiling_mib": {"type": "number", "description": "usable VRAM (macOS: GPU wired limit)"},
+            "budget_mib": {"type": "number", "description": "ceiling x gpu_memory_utilization for vLLM, else ceiling"},
+            "unified_memory": {"type": "boolean"}, "bandwidth_gbs": {"type": "number"}, "tflops_fp16": {"type": "number"},
+            "pcie": {"type": ["string", "null"]}, "ram_mib": {"type": "number"}, "probed": {"type": "boolean"},
+            "supports_bf16": {"type": "boolean"}
+          }
+        },
+        "settings": {
+          "type": "object",
+          "required": ["engine", "mode", "quant", "context", "batch"],
+          "properties": {
+            "engine": {"enum": ["llama.cpp", "ollama", "vllm", "exllamav2", "unsloth", "transformers"]},
+            "mode": {"enum": ["inference", "lora", "qlora", "full"]},
+            "quant": {"type": "string"}, "quant_bpw": {"type": "number"},
+            "context": {"type": "integer"}, "batch": {"type": "integer"},
+            "kv_cache_k": {"type": ["string", "null"]}, "kv_cache_v": {"type": ["string", "null"]},
+            "gpu_layers": {"type": "integer", "description": "llama.cpp -ngl (max_gpu_layers = all layers + output head)"},
+            "gpu_layers_auto": {"type": "boolean"}, "max_gpu_layers": {"type": "integer"},
+            "cpu_moe_layers": {"type": "integer"}, "flash_attention": {"type": "boolean"}, "ubatch": {"type": "integer"},
+            "lora_rank": {"type": ["integer", "null"]}, "lora_targets": {"type": ["array", "null"], "items": {"type": "string"}},
+            "optimizer": {"type": ["string", "null"]}, "grad_checkpointing": {"type": ["string", "null"]},
+            "gpu_mem_util": {"type": ["number", "null"]}
+          }
+        },
+        "segments": {"type": "array", "items": {"$ref": "#/$defs/Segment"}, "minItems": 5, "maxItems": 5},
+        "gpu_total_mib": {"type": "number"},
+        "ceiling_mib": {"type": "number"},
+        "budget_mib": {"type": "number"},
+        "headroom_mib": {"type": "number", "description": "budget - gpu_total; negative means over budget"},
+        "utilization": {"type": ["number", "null"]},
+        "offload": {
+          "type": "object",
+          "properties": {
+            "cpu_weights_mib": {"type": "number"}, "cpu_kv_mib": {"type": "number"}, "cpu_buffers_mib": {"type": "number"},
+            "ram_total_mib": {"type": "number"}, "spill_mib": {"type": "number"},
+            "layers_on_gpu": {"type": "integer"}, "layers_total": {"type": "integer"}, "output_on_gpu": {"type": "boolean"}
+          }
+        },
+        "performance": {
+          "type": "object",
+          "description": "inference: decode_* / prefill_*; training: train_tok_s",
+          "properties": {
+            "decode_tok_s": {"type": "number", "description": "aggregate decode tokens/s near the start of the context"},
+            "decode_tok_s_per_seq": {"type": "number"},
+            "decode_tok_s_full_ctx": {"type": "number"},
+            "prefill_tok_s": {"type": "number"},
+            "ttft_full_ctx_s": {"type": ["number", "null"]},
+            "bottleneck": {"enum": ["gpu_memory_bandwidth", "system_ram_bandwidth", "pcie_spill", "compute"]},
+            "train_tok_s": {"type": "number"}, "mfu_assumed": {"type": "number"},
+            "step_time_s": {"type": ["number", "null"]}, "epoch_hours": {"type": "number"}
+          }
+        },
+        "details": {"type": "object", "description": "per-segment sub-breakdowns (weights by category, KV bytes/token, compute-buffer parts, overhead parts, LoRA/optimizer parts)"},
+        "layer_map": {
+          "type": "array",
+          "items": {"type": "object", "properties": {
+            "layer": {"type": "integer"}, "weights_mib": {"type": "number"}, "kv_mib": {"type": "number"},
+            "device": {"enum": ["gpu", "split", "cpu"]}, "type": {"enum": ["full", "sliding", "linear"]}}}
+        },
+        "limits": {
+          "type": "object",
+          "properties": {
+            "max_context_full_gpu": {"type": ["integer", "null"]},
+            "max_batch_full_gpu": {"type": ["integer", "null"]}
+          }
+        },
+        "warnings": {"type": "array", "items": {"type": "string"}},
+        "notes": {"type": "array", "items": {"type": "string"}}
+      }
+    },
+    "Command": {
+      "type": "object",
+      "required": ["engine", "shell", "files", "flags"],
+      "properties": {
+        "engine": {"type": "string"},
+        "shell": {"type": "string", "description": "copy-paste shell snippet"},
+        "argv": {"type": "array", "items": {"type": "string"}},
+        "env": {"type": "object", "additionalProperties": {"type": "string"}},
+        "files": {"type": "object", "additionalProperties": {"type": "string"}, "description": "Modelfile, config.yml or train.py contents"},
+        "flags": {"type": "array", "items": {"type": "object", "properties": {"flag": {"type": "string"}, "why": {"type": "string"}}}},
+        "endpoint": {"type": "string"},
+        "notes": {"type": "array", "items": {"type": "string"}}
+      }
+    },
+    "Optimize": {
+      "type": "object",
+      "required": ["best", "command", "alternatives", "explanation"],
+      "properties": {
+        "best": {"$ref": "#/$defs/Estimate"},
+        "command": {"$ref": "#/$defs/Command"},
+        "alternatives": {"type": "array", "items": {"type": "object"}},
+        "explanation": {"type": "array", "items": {"type": "string"}},
+        "prefer": {"type": "string"},
+        "searched": {"type": "integer"}
+      }
+    },
+    "Matrix": {
+      "type": "object",
+      "required": ["model", "gpu", "contexts", "quants", "cells"],
+      "properties": {
+        "model": {"type": "string"}, "gpu": {"type": "string"}, "engine": {"type": "string"}, "mode": {"type": "string"},
+        "contexts": {"type": "array", "items": {"type": "integer"}},
+        "quants": {"type": "array", "items": {"type": "string"}},
+        "cells": {"type": "array", "items": {"type": "object", "required": ["quant", "context", "status", "gpu_total_mib"],
+          "properties": {"quant": {"type": "string"}, "context": {"type": "integer"}, "status": {"$ref": "#/$defs/Status"},
+                         "gpu_total_mib": {"type": "number"}, "gpu_layers": {"type": "integer"}, "tok_s": {"type": "number"}}}}
+      }
+    }
+  }
+}
